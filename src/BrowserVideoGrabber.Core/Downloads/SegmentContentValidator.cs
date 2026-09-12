@@ -63,6 +63,7 @@ public sealed class SegmentContentValidator
 {
     private readonly double _minimumUsableRatio;
     private readonly HashSet<string> _seen = new HashSet<string>(StringComparer.Ordinal);
+    private readonly object _gate = new();
 
     /// <summary>
     /// 使用默认参数构造校验器。
@@ -139,7 +140,12 @@ public sealed class SegmentContentValidator
     /// <param name="fingerprint">由 <see cref="ComputeFingerprint"/> 生成的指纹。</param>
     public void Remember(string fingerprint)
     {
-        if (!string.IsNullOrWhiteSpace(fingerprint))
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            return;
+        }
+
+        lock (_gate)
         {
             _seen.Add(fingerprint);
         }
@@ -152,7 +158,45 @@ public sealed class SegmentContentValidator
     /// <returns>若已记录则为 true（疑似重复占位）。</returns>
     public bool IsDuplicate(string fingerprint)
     {
-        return !string.IsNullOrWhiteSpace(fingerprint) && _seen.Contains(fingerprint);
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            return _seen.Contains(fingerprint);
+        }
+    }
+
+    /// <summary>
+    /// 原子地「检测并登记」一份指纹：若此前未见过则登记并返回 true（可取回），
+    /// 若已见过则直接返回 false（重复占位）。
+    /// </summary>
+    /// <remarks>
+    /// 取片是并发进行的，若把 <see cref="IsDuplicate"/> 与 <see cref="Remember"/> 分开调用，
+    /// 多个内容相同的占位分片可能同时看到「未重复」而都被判为可取回，从而漏掉重复检测。
+    /// 因此并发场景必须走本方法，由同一把锁保证「检测+登记」不可分割。
+    /// </remarks>
+    /// <param name="fingerprint">由 <see cref="ComputeFingerprint"/> 生成的指纹。</param>
+    /// <returns>指纹首次出现（可取回）则为 true；已重复（应判废）则为 false。</returns>
+    public bool TryClaim(string fingerprint)
+    {
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (_seen.Contains(fingerprint))
+            {
+                return false;
+            }
+
+            _seen.Add(fingerprint);
+            return true;
+        }
     }
 
     /// <summary>
