@@ -54,8 +54,14 @@ public sealed class RequestContext
     /// <summary>会话 Cookie 串，形如 <c>k1=v1; k2=v2</c>。</summary>
     public string? Cookie { get; set; }
 
-    /// <summary>其余自定义请求头。键使用不区分大小写的比较器，避免重复附加同名头。</summary>
-    public IDictionary<string, string> ExtraHeaders { get; } =
+    /// <summary>
+    /// 其余自定义请求头。键使用不区分大小写的比较器，避免重复附加同名头。
+    /// </summary>
+    /// <remarks>
+    /// 提供 <c>init</c> 访问器而非只读属性，是为了让 JSON 反序列化能够整体替换该字典：
+    /// 只读集合属性在部分序列化场景下无法被正确还原，会导致重启后自定义请求头静默丢失。
+    /// </remarks>
+    public IDictionary<string, string> ExtraHeaders { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

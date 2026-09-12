@@ -245,7 +245,7 @@ public sealed class FfmpegDownloadHandler : IDownloadHandler
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            ApplyRequestHeaders(request, task.Context);
+            HttpRequestHeaders.Apply(request, task.Context);
 
             using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
@@ -266,36 +266,6 @@ public sealed class FfmpegDownloadHandler : IDownloadHandler
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException)
         {
             return null;
-        }
-    }
-
-    /// <summary>
-    /// 把请求上下文写入 HTTP 请求头。
-    /// </summary>
-    /// <param name="request">目标请求。</param>
-    /// <param name="context">请求上下文。</param>
-    private static void ApplyRequestHeaders(HttpRequestMessage request, RequestContext context)
-    {
-        if (!string.IsNullOrWhiteSpace(context.Referer)
-            && Uri.TryCreate(context.Referer, UriKind.Absolute, out var referer))
-        {
-            request.Headers.Referrer = referer;
-        }
-
-        if (!string.IsNullOrWhiteSpace(context.UserAgent))
-        {
-            // 使用 TryAddWithoutValidation：UA 串中常含括号与分号，严格校验会直接抛异常
-            request.Headers.TryAddWithoutValidation("User-Agent", context.UserAgent);
-        }
-
-        if (!string.IsNullOrWhiteSpace(context.Cookie))
-        {
-            request.Headers.TryAddWithoutValidation("Cookie", context.Cookie);
-        }
-
-        foreach (var header in context.ExtraHeaders)
-        {
-            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
         }
     }
 }
