@@ -53,8 +53,18 @@ namespace BrowserVideoGrabber.Infrastructure.Downloads;
 /// <paramref name="cancellationToken"/> 是否真的被触发。
 /// </para>
 /// <para>
-/// <b>对注入的 HttpClient 的要求</b>：请勿启用自动解压（<c>AutomaticDecompression</c>）。
-/// 分片下载依赖字节偏移，一旦响应体被透明解压，拼接结果就会错位。
+/// <b>对注入的 HttpClient 的要求</b>：
+/// <list type="bullet">
+///   <item><description>
+///     请勿启用自动解压（<c>AutomaticDecompression</c>）。分片下载依赖字节偏移，
+///     一旦响应体被透明解压，拼接结果就会错位。
+///   </description></item>
+///   <item><description>
+///     请把 <c>Timeout</c> 设为 <see cref="Timeout.InfiniteTimeSpan"/>。
+///     该属性约束的是「整个请求的总时长」，会把正常的大文件慢速下载误判为超时；
+///     超时控制已由本类的探测超时与空闲超时（见 <see cref="HttpDownloadOptions"/>）承担。
+///   </description></item>
+/// </list>
 /// </para>
 /// </remarks>
 public sealed class HttpDownloadHandler : IDownloadHandler
@@ -186,12 +196,19 @@ public sealed class HttpDownloadHandler : IDownloadHandler
     /// </remarks>
     private async Task<ProbeResult> ProbeAsync(Uri uri, RequestContext context, CancellationToken cancellationToken)
     {
+        // 探测必须有独立超时：地址僵死时若不设限，任务会永久停在「正在下载」而不给任何反馈
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (_options.ProbeTimeout > TimeSpan.Zero)
+        {
+            timeout.CancelAfter(_options.ProbeTimeout);
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         HttpRequestHeaders.Apply(request, context);
         request.Headers.Range = new RangeHeaderValue(0, 0);
 
         using var response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
             .ConfigureAwait(false);
 
         // 206：服务端按分片语义响应，长度取自 Content-Range 的总量字段
@@ -499,6 +516,13 @@ public sealed class HttpDownloadHandler : IDownloadHandler
         // 分片起点 + 已有长度 = 本次请求的起始偏移
         var from = segment.Start + existing;
 
+        // 空闲超时：每读到数据就重置，只有「长时间一个字节都没到」才判定连接僵死
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (_options.IdleTimeout > TimeSpan.Zero)
+        {
+            idle.CancelAfter(_options.IdleTimeout);
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         HttpRequestHeaders.Apply(request, task.Context);
 
@@ -510,7 +534,7 @@ public sealed class HttpDownloadHandler : IDownloadHandler
         }
 
         using var response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, idle.Token)
             .ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.OK && from > 0)
@@ -525,7 +549,7 @@ public sealed class HttpDownloadHandler : IDownloadHandler
                 $"服务器返回异常状态：HTTP {(int)response.StatusCode} {response.ReasonPhrase}。");
         }
 
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var source = await response.Content.ReadAsStreamAsync(idle.Token).ConfigureAwait(false);
         await using var destination = _fileSystem.OpenWrite(segment.PartPath, append: existing > 0);
 
         var buffer = new byte[_options.BufferSize];
@@ -534,12 +558,19 @@ public sealed class HttpDownloadHandler : IDownloadHandler
 
         while (true)
         {
-            var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+            var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), idle.Token).ConfigureAwait(false);
             if (read <= 0)
             {
                 break;
             }
 
+            if (_options.IdleTimeout > TimeSpan.Zero)
+            {
+                // 有数据到达即视为连接存活，把空闲计时重新拉满
+                idle.CancelAfter(_options.IdleTimeout);
+            }
+
+            // 写盘使用原始取消令牌：磁盘不是可能僵死的网络资源，不应被空闲超时打断
             await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             written += read;
             Interlocked.Exchange(ref segment.Downloaded, written);

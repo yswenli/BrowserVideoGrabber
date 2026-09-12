@@ -58,4 +58,28 @@ public sealed class HttpDownloadOptions
 
     /// <summary>进度上报的最小间隔（毫秒）。默认 100 毫秒。</summary>
     public int ProgressIntervalMilliseconds { get; set; } = 100;
+
+    /// <summary>
+    /// 探测请求的超时时间。默认 30 秒。
+    /// </summary>
+    /// <remarks>
+    /// 探测只取一个字节，理论上应在毫秒级完成；给到 30 秒是为了容忍高延迟链路，
+    /// 超过即认为该地址不可用并转由 ffmpeg 尝试。
+    /// </remarks>
+    public TimeSpan ProbeTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 分片传输的<b>空闲</b>超时时间。默认 60 秒。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 这里刻意不用 <c>HttpClient.Timeout</c>：它约束的是「整个请求从发出到读完正文」的总时长，
+    /// 而大文件下载动辄数十分钟，用总时长做超时会把正常的慢速下载误杀。
+    /// </para>
+    /// <para>
+    /// 改为「空闲超时」——只要还在持续收到数据就永不超时，一旦超过该时长没有任何字节到达
+    /// 就判定连接已僵死并中断。这正是下载器真正需要的语义。
+    /// </para>
+    /// </remarks>
+    public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromSeconds(60);
 }

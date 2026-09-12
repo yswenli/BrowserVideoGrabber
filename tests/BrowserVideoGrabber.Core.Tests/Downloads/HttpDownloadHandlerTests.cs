@@ -288,6 +288,32 @@ public sealed class HttpDownloadHandlerTests
     }
 
     /// <summary>
+    /// 探测超时必须中断本次尝试并交由回退处理：否则僵死地址会让任务永久停在「正在下载」。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_ShouldFallback_WhenProbeTimesOut()
+    {
+        var http = new FakeHttpMessageHandler([]) { Delay = TimeSpan.FromMilliseconds(300) };
+        var fileSystem = new FakeFileSystem();
+        var fallback = new FakeDownloadHandler
+        {
+            ResultFactory = _ => DownloadResult.Ok(OutputPath, 2048)
+        };
+
+        var handler = CreateHandler(
+            http,
+            fileSystem,
+            out _,
+            fallback: fallback,
+            probeTimeout: TimeSpan.FromMilliseconds(50));
+
+        var result = await handler.DownloadAsync(CreateTask(VideoFormat.Mp4), new Progress<DownloadProgress>(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, fallback.AttemptCount);
+    }
+
+    /// <summary>
     /// 创建被测处理器。
     /// </summary>
     /// <param name="http">假 HTTP 处理器。</param>
@@ -296,6 +322,7 @@ public sealed class HttpDownloadHandlerTests
     /// <param name="segmentCount">分片并发数。</param>
     /// <param name="minimumSegmentBytes">触发分片的最小字节数。</param>
     /// <param name="fallback">回退处理器。</param>
+    /// <param name="probeTimeout">探测超时。</param>
     /// <returns>被测处理器实例。</returns>
     private static HttpDownloadHandler CreateHandler(
         FakeHttpMessageHandler http,
@@ -303,7 +330,8 @@ public sealed class HttpDownloadHandlerTests
         out HttpClient httpClient,
         int segmentCount = 4,
         long minimumSegmentBytes = 4L * 1024 * 1024,
-        IDownloadHandler? fallback = null)
+        IDownloadHandler? fallback = null,
+        TimeSpan? probeTimeout = null)
     {
         httpClient = new HttpClient(http) { Timeout = TimeSpan.FromSeconds(5) };
 
@@ -312,6 +340,11 @@ public sealed class HttpDownloadHandlerTests
             SegmentCount = segmentCount,
             MinimumSegmentBytes = minimumSegmentBytes
         };
+
+        if (probeTimeout.HasValue)
+        {
+            options.ProbeTimeout = probeTimeout.Value;
+        }
 
         return new HttpDownloadHandler(fileSystem, httpClient, options, fallback);
     }
