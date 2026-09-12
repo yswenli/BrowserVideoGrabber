@@ -1,0 +1,41 @@
+## 忽略 .NET 构建产物
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## 忽略 Visual Studio / Rider / VS Code 本地配置
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## 忽略 NuGet 中间产物
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+
+## 忽略测试与覆盖率产物
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+coverage*.info
+
+## 忽略本地运行期数据
+*.log
+*.tmp
+*.part
+*.progress
+/Output/
+/Downloads/
+
+## 忽略操作系统文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
