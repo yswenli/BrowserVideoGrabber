@@ -71,10 +71,51 @@ public sealed class FfmpegOptions
     /// 协议白名单（<c>-protocol_whitelist</c>）。
     /// 不放开这一限制时，ffmpeg 会拒绝加载 HLS 清单中的分片。
     /// </summary>
-    public string ProtocolWhitelist { get; set; } = "file,http,https,tcp,tls,crypto";
+    /// <remarks>
+    /// <para>
+    /// 列表中的 <c>httpproxy</c> 不可省略：当系统存在 <c>http_proxy</c> / <c>https_proxy</c>
+    /// 环境变量（常见的代理/加速工具都会设置）时，ffmpeg 会改走 <c>httpproxy</c> 协议取流。
+    /// 若白名单中没有它，ffmpeg 会在打开输入阶段直接报
+    /// <c>Protocol 'httpproxy' not on whitelist</c> 并以 <c>-22 (EINVAL)</c> 退出 ——
+    /// 表面上像是「地址失效」或「CDN 拒绝」，实际与远端毫无关系。
+    /// </para>
+    /// <para>
+    /// <c>file</c> 与 <c>crypto</c> 同样是 HLS 的硬性需求：
+    /// 前者用于清单中出现的本地路径，后者用于 AES-128 解密。
+    /// </para>
+    /// </remarks>
+    public string ProtocolWhitelist { get; set; } = "file,http,https,tcp,tls,crypto,httpproxy";
 
     /// <summary>
     /// 允许的扩展名（<c>-allowed_extensions</c>）。设为 ALL 以兼容 .ts / .m4s / .aac 等各种分片。
     /// </summary>
     public string AllowedExtensions { get; set; } = "ALL";
+
+    /// <summary>
+    /// 是否关闭 ffmpeg 的扩展名挑剔开关（<c>-extension_picky 0</c>）。默认 true。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// HLS 解复用器对分片扩展名有一份<b>硬编码白名单</b>，且它<b>不受 <c>-allowed_extensions</c> 约束</b>。
+    /// 真实站点把 MPEG-TS 分片命名为 <c>.jpeg</c> / <c>.jpg</c> 是常见做法（用于规避简易抓取工具），
+    /// 此时 ffmpeg 会直接报
+    /// <c>URL ... is not in allowed_segment_extensions, consider updating hls.c</c>
+    /// 并以「Invalid data found when processing input」失败 —— 表面上完全看不出是扩展名问题。
+    /// </para>
+    /// <para>
+    /// <b>版本要求</b>：该选项由 ffmpeg 7.1 引入。若用户环境为更早版本，ffmpeg 会报
+    /// 「Unrecognized option 'extension_picky'」而直接退出，此时应把本属性置为 false。
+    /// 本工具的 VOD 下载已改由 C# 自行取片，该开关只影响<b>直播与兜底</b>这两条 ffmpeg 直连路径。
+    /// </para>
+    /// </remarks>
+    public bool DisableExtensionPicky { get; set; } = true;
+
+    /// <summary>
+    /// 合并产出 mp4 时是否把索引前移（<c>-movflags +faststart</c>）。默认 true。
+    /// </summary>
+    /// <remarks>
+    /// 仅对「本地输入重封装」有意义：把 moov 原子放到文件头部，成品才能被浏览器与流式播放器
+    /// 边下载边播放。对纯本地播放或二次处理无影响。
+    /// </remarks>
+    public bool EnableFastStart { get; set; } = true;
 }

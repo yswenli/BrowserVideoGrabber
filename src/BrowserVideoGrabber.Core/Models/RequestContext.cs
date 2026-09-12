@@ -48,7 +48,22 @@ public sealed class RequestContext
     /// <summary>浏览器 User-Agent。建议与内嵌浏览器保持一致，避免出现版本特征差异。</summary>
     public string? UserAgent { get; set; }
 
-    /// <summary>跨域请求来源标识。</summary>
+    /// <summary>
+    /// 跨域请求来源标识。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>该头默认不外发</b>，仅作为诊断信息保留。原因是一组可复现的实测结论：当请求携带
+    /// <c>Origin</c> 时，部分 CDN（playergo 系）会对<b>每一个</b>分片返回同一张
+    /// 56024 字节的占位 JPEG —— HTTP 状态码 200、<c>Content-Type: image/jpeg</c>，
+    /// 而内容是一段格式完全合法的 8.02 秒 TS（首字节为合法同步字 <c>0x47</c>）。
+    /// 去掉该头后，同一地址、同一时刻返回的是互不相同、体积正常的真实分片。
+    /// </para>
+    /// <para>
+    /// 危害在于隐蔽：ffmpeg 能正常解码占位内容、<c>-c copy</c> 顺利完成、退出码为 0，
+    /// 工具于是判定「下载成功」，而用户拿到的是一个能打开却不是目标视频的 mp4。
+    /// </para>
+    /// </remarks>
     public string? Origin { get; set; }
 
     /// <summary>会话 Cookie 串，形如 <c>k1=v1; k2=v2</c>。</summary>
@@ -91,7 +106,10 @@ public sealed class RequestContext
         }
 
         AppendHeader("Referer", Referer);
-        AppendHeader("Origin", Origin);
+
+        // 刻意不追加 Origin：详见 Origin 属性的备注 —— 该头会让部分 CDN 对每个分片
+        // 返回同一张合法但无意义的占位图，且失败方式极其隐蔽（HTTP 200 + ffmpeg 退出码 0）。
+        // 分片请求属于同源子资源请求，缺少 Origin 不影响正常的 Referer 鉴权。
         AppendHeader("User-Agent", UserAgent);
         AppendHeader("Cookie", Cookie);
 

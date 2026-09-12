@@ -218,6 +218,106 @@ public sealed class FfmpegArgumentBuilderTests
     }
 
     /// <summary>
+    /// 分片类格式必须关闭 ffmpeg 的扩展名挑剔开关。
+    /// </summary>
+    /// <remarks>
+    /// HLS 解复用器对分片扩展名有一份硬编码白名单，<b>且不受 <c>-allowed_extensions</c> 影响</b>。
+    /// 真实站点把 MPEG-TS 分片命名成 <c>.jpeg</c> 属于常见做法，此时 ffmpeg 会直接以
+    /// 「Invalid data found when processing input」拒绝加载。唯一可行的开关就是
+    /// <c>-extension_picky 0</c>，且它是输入选项，必须出现在 <c>-i</c> 之前。
+    /// </remarks>
+    [Fact]
+    public void Build_ShouldDisableExtensionPicky_ForStreamFormats()
+    {
+        var task = CreateTask(VideoFormat.M3u8, "https://a.com/hls/index.m3u8", @"D:\out\movie.mp4");
+
+        var args = FfmpegArgumentBuilder.Build(task);
+
+        Assert.Equal("0", GetValueAfter(args, "-extension_picky"));
+
+        // 必须在 -i 之前，否则 ffmpeg 会把它当作输出选项而忽略
+        Assert.True(IndexOf(args, "-extension_picky") < IndexOf(args, "-i"));
+    }
+
+    /// <summary>
+    /// MP4 整文件不涉及分片扩展名白名单，无需该开关。
+    /// </summary>
+    [Fact]
+    public void Build_ShouldOmitExtensionPicky_ForMp4()
+    {
+        var task = CreateTask(VideoFormat.Mp4, "https://a.com/v.mp4", @"D:\out\v.mp4");
+
+        var args = FfmpegArgumentBuilder.Build(task);
+
+        Assert.DoesNotContain("-extension_picky", args);
+    }
+
+    /// <summary>
+    /// 显式关闭该选项时不应附加参数，供 ffmpeg 版本低于 7.1 的环境回退。
+    /// </summary>
+    [Fact]
+    public void Build_ShouldOmitExtensionPicky_WhenDisabled()
+    {
+        var task = CreateTask(VideoFormat.M3u8, "https://a.com/hls/index.m3u8", @"D:\out\movie.mp4");
+
+        var args = FfmpegArgumentBuilder.Build(task, new FfmpegOptions { DisableExtensionPicky = false });
+
+        Assert.DoesNotContain("-extension_picky", args);
+    }
+
+    /// <summary>
+    /// 本地重封装模式：只处理磁盘上的文件，不得出现任何网络相关开关。
+    /// </summary>
+    /// <remarks>
+    /// 这是「C# 取分片 + ffmpeg 只做合并」架构的落点。若这里混入了
+    /// <c>-headers</c> / <c>-protocol_whitelist</c> 等网络开关，说明职责边界被破坏，
+    /// 本次改造的核心收益（可逐片校验、可解密、不受 CDN 反爬影响）会随之失效。
+    /// </remarks>
+    [Fact]
+    public void BuildLocalRemux_ShouldProduceLocalOnlyArguments()
+    {
+        const string input = @"D:\tmp\assembled.ts";
+        const string output = @"D:\My Videos\电影 第一集.mp4";
+
+        var args = FfmpegArgumentBuilder.BuildLocalRemux(input, output);
+
+        Assert.Equal(input, GetValueAfter(args, "-i"));
+        Assert.Equal("copy", GetValueAfter(args, "-c"));
+        Assert.Equal(output, args[^1]);
+
+        Assert.Contains("-y", args);
+        Assert.DoesNotContain("-headers", args);
+        Assert.DoesNotContain("-protocol_whitelist", args);
+        Assert.DoesNotContain("-allowed_extensions", args);
+        Assert.DoesNotContain("-reconnect", args);
+    }
+
+    /// <summary>
+    /// 合并产出的 mp4 应把索引前移，浏览器与流式播放器才能边下边播。
+    /// </summary>
+    [Fact]
+    public void BuildLocalRemux_ShouldEnableFastStart()
+    {
+        var args = FfmpegArgumentBuilder.BuildLocalRemux(@"D:\tmp\assembled.ts", @"D:\out\movie.mp4");
+
+        Assert.Equal("+faststart", GetValueAfter(args, "-movflags"));
+    }
+
+    /// <summary>
+    /// 关闭 faststart 时不应出现该开关。
+    /// </summary>
+    [Fact]
+    public void BuildLocalRemux_ShouldOmitFastStart_WhenDisabled()
+    {
+        var args = FfmpegArgumentBuilder.BuildLocalRemux(
+            @"D:\tmp\assembled.ts",
+            @"D:\out\movie.mp4",
+            new FfmpegOptions { EnableFastStart = false });
+
+        Assert.DoesNotContain("-movflags", args);
+    }
+
+    /// <summary>
     /// 构造一个测试用下载任务。
     /// </summary>
     /// <param name="format">资源格式。</param>
@@ -250,5 +350,24 @@ public sealed class FfmpegArgumentBuilderTests
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 取得开关在参数列表中的下标，用于校验选项的先后顺序。
+    /// </summary>
+    /// <param name="args">参数列表。</param>
+    /// <param name="switchName">开关名。</param>
+    /// <returns>下标；未找到时返回 -1。</returns>
+    private static int IndexOf(IReadOnlyList<string> args, string switchName)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (string.Equals(args[i], switchName, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 }

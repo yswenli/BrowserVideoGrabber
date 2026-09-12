@@ -112,6 +112,14 @@ public static class FfmpegArgumentBuilder
 
             arguments.Add("-allowed_extensions");
             arguments.Add(options.AllowedExtensions);
+
+            // 关掉扩展名挑剔：分片扩展名与真实内容不符（典型是 .jpeg 里装 MPEG-TS）时，
+            // HLS 解复用器的硬编码白名单会直接拒绝加载，而 -allowed_extensions 管不到它
+            if (options.DisableExtensionPicky)
+            {
+                arguments.Add("-extension_picky");
+                arguments.Add("0");
+            }
         }
 
         // ---------- 输入源 ----------
@@ -134,6 +142,72 @@ public static class FfmpegArgumentBuilder
 
         // ---------- 输出文件（必须是最后一个参数） ----------
         arguments.Add(string.IsNullOrWhiteSpace(task.OutputPath) ? "output.mp4" : task.OutputPath);
+
+        return arguments;
+    }
+
+    /// <summary>
+    /// 为「本地文件重封装」构建参数列表：把已经拼接好的本地 <c>.ts</c> 封装为 mp4。
+    /// </summary>
+    /// <param name="inputPath">本地输入文件完整路径（由调用方负责拼接完成）。</param>
+    /// <param name="outputPath">输出 mp4 完整路径。</param>
+    /// <param name="options">调用配置。为空时使用默认配置。</param>
+    /// <returns>可直接交给进程运行器的参数列表（不含可执行文件本身）。</returns>
+    /// <remarks>
+    /// <para>
+    /// 这是「C# 取分片 + ffmpeg 只做合并」架构的落点。与 <see cref="Build"/> 的根本区别是
+    /// <b>输入是本地磁盘文件而非 URL</b>，因此这里刻意<b>不产生任何网络相关开关</b>：
+    /// 没有 <c>-headers</c>、没有 <c>-protocol_whitelist</c>、没有 <c>-reconnect</c>、
+    /// 也没有 <c>-extension_picky</c> —— 那些问题全部在取分片阶段由 C# 解决掉了。
+    /// </para>
+    /// <para>
+    /// 若这里混入网络开关，说明职责边界被破坏：一旦 ffmpeg 重新接触网络，
+    /// 「逐片校验」「AES-128 解密」「不受 CDN 反爬影响」这些收益都会随之失效。
+    /// </para>
+    /// <para>
+    /// 全程 <c>-c copy</c>：分片本身已是目标编码的码流，重编码既无必要也会造成画质损失。
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> BuildLocalRemux(
+        string inputPath,
+        string outputPath,
+        FfmpegOptions? options = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(inputPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+
+        options ??= new FfmpegOptions();
+        var arguments = new List<string>();
+
+        // ---------- 全局选项 ----------
+        if (options.Overwrite)
+        {
+            arguments.Add("-y");
+        }
+
+        if (options.EnableProgressPipe)
+        {
+            arguments.Add("-nostats");
+            arguments.Add("-progress");
+            arguments.Add("pipe:2");
+        }
+
+        // ---------- 输入源（本地文件，无任何网络选项） ----------
+        arguments.Add("-i");
+        arguments.Add(inputPath);
+
+        // ---------- 输出选项 ----------
+        arguments.Add("-c");
+        arguments.Add("copy");
+
+        if (options.EnableFastStart)
+        {
+            arguments.Add("-movflags");
+            arguments.Add("+faststart");
+        }
+
+        // ---------- 输出文件（必须是最后一个参数） ----------
+        arguments.Add(outputPath);
 
         return arguments;
     }

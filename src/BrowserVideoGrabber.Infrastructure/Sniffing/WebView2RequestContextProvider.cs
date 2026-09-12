@@ -82,10 +82,13 @@ public sealed class WebView2RequestContextProvider : IRequestContextProvider
             : configuredUserAgent;
 
         var pageUrl = coreWebView.Source;
-        if (!string.IsNullOrWhiteSpace(pageUrl) && Uri.TryCreate(pageUrl, UriKind.Absolute, out var pageUri))
+        if (!string.IsNullOrWhiteSpace(pageUrl) && Uri.TryCreate(pageUrl, UriKind.Absolute, out _))
         {
             context.Referer = pageUrl;
-            context.Origin = $"{pageUri.Scheme}://{pageUri.Authority}";
+
+            // 刻意不再推导并设置 Origin：下载链路（ffmpeg 与 HttpClient 两条）都不得外发该头，
+            // 否则部分 CDN 会对每个分片返回同一张占位图，而失败表现是「下载成功但内容不对」。
+            // 详见 RequestContext.Origin 的备注。留空即可，无需其它处理。
         }
 
         var cookie = await CookieExporter.ExportAsync(coreWebView, resourceUrl).ConfigureAwait(true);
