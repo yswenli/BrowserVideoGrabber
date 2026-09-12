@@ -85,6 +85,28 @@ public sealed class M3u8Playlist
     /// <summary>AES-128 密钥地址。未加密时为 null。</summary>
     public string? KeyUri { get; init; }
 
+    /// <summary>
+    /// 清单声明的初始向量（<c>#EXT-X-KEY</c> 的 <c>IV</c> 属性，形如 <c>0x0123…</c>）。未声明时为 null。
+    /// </summary>
+    /// <remarks>
+    /// 该属性仅在 AES-128 下有意义。为 null 不代表不需要 IV，而是要求解密方按规范
+    /// 用「媒体序号 + 分片下标」自行推导 —— 两者的语义差别必须保留，不能在解析阶段就填上默认值。
+    /// </remarks>
+    public string? KeyIv { get; init; }
+
+    /// <summary>媒体序号（<c>#EXT-X-MEDIA-SEQUENCE</c>）。未声明时为 0。</summary>
+    /// <remarks>该值参与 IV 推导，因此不能省略为 null：未声明的语义就是「从 0 开始」。</remarks>
+    public long MediaSequence { get; init; }
+
+    /// <summary>
+    /// 是否为直播流。
+    /// </summary>
+    /// <remarks>
+    /// 判定依据是「含分片且缺少 <c>#EXT-X-ENDLIST</c>」。主清单不含分片，恒为 false ——
+    /// 否则「多清晰度点播」会被误判成直播，从而错走 ffmpeg 录制路径。
+    /// </remarks>
+    public bool IsLive { get; init; }
+
     /// <summary>fMP4（DASH 风格）播放列表的初始化分片地址（#EXT-X-MAP）。未声明时为 null。</summary>
     public string? InitSegmentUri { get; init; }
 

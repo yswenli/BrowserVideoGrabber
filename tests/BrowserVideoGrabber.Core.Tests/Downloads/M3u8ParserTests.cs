@@ -245,4 +245,114 @@ public sealed class M3u8ParserTests
         Assert.Single(playlist.Segments);
         Assert.Equal("https://a.com/hls/seg_000.ts", playlist.Segments[0].Uri);
     }
+
+    /// <summary>
+    /// 媒体序号是推导解密向量（IV）的依据：清单未声明 IV 时，
+    /// 规范要求用「媒体序号 + 分片下标」作为 CBC 的初始化向量。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldExtractMediaSequence()
+    {
+        const string content = """
+            #EXTM3U
+            #EXT-X-MEDIA-SEQUENCE:42
+            #EXTINF:10.0,
+            seg_000.ts
+            #EXT-X-ENDLIST
+            """;
+
+        var playlist = M3u8Parser.Parse(content, BaseUri);
+
+        Assert.Equal(42L, playlist.MediaSequence);
+    }
+
+    /// <summary>
+    /// 未声明 MEDIA-SEQUENCE 时默认为 0。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldDefaultMediaSequenceToZero()
+    {
+        const string content = """
+            #EXTM3U
+            #EXTINF:10.0,
+            seg_000.ts
+            """;
+
+        var playlist = M3u8Parser.Parse(content, BaseUri);
+
+        Assert.Equal(0L, playlist.MediaSequence);
+    }
+
+    /// <summary>
+    /// #EXT-X-KEY 中的 IV 属性必须被解析出来；显式声明时优先于媒体序号推导。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldExtractIvFromKeyTag()
+    {
+        const string content = """
+            #EXTM3U
+            #EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x0123456789ABCDEF0123456789ABCDEF
+            #EXTINF:10.0,
+            seg_000.ts
+            """;
+
+        var playlist = M3u8Parser.Parse(content, BaseUri);
+
+        Assert.Equal(M3u8Encryption.Aes128, playlist.Encryption);
+        Assert.Equal("0x0123456789ABCDEF0123456789ABCDEF", playlist.KeyIv);
+    }
+
+    /// <summary>
+    /// 含 #EXT-X-ENDLIST 的是点播（VOD），分片列表有确定的终点。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldNotBeLive_WhenEndListPresent()
+    {
+        const string content = """
+            #EXTM3U
+            #EXTINF:10.0,
+            seg_000.ts
+            #EXT-X-ENDLIST
+            """;
+
+        var playlist = M3u8Parser.Parse(content, BaseUri);
+
+        Assert.False(playlist.IsLive);
+    }
+
+    /// <summary>
+    /// 缺少 #EXT-X-ENDLIST 且含分片的是直播流：分片列表会持续增长，
+    /// C# 侧无法据此规划一次完整的下载。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldBeLive_WhenEndListMissing()
+    {
+        const string content = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:10
+            #EXTINF:10.0,
+            seg_000.ts
+            """;
+
+        var playlist = M3u8Parser.Parse(content, BaseUri);
+
+        Assert.True(playlist.IsLive);
+    }
+
+    /// <summary>
+    /// 主清单不含分片，不适用「直播」判定，避免把「多清晰度点播」误判成直播而错走录制路径。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldNotBeLive_ForMasterPlaylist()
+    {
+        const string content = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360
+            640x360/index.m3u8
+            """;
+
+        var playlist = M3u8Parser.Parse(content, BaseUri);
+
+        Assert.False(playlist.IsLive);
+    }
 }

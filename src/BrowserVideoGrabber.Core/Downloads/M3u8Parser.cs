@@ -73,9 +73,12 @@ public static class M3u8Parser
 
         var encryption = M3u8Encryption.None;
         string? keyUri = null;
+        string? keyIv = null;
         string? initSegmentUri = null;
+        var mediaSequence = 0L;
         var isDrmProtected = false;
         var isMasterPlaylist = false;
+        var hasEndList = false;
         var totalSeconds = 0d;
 
         // 待与下一个 URI 行配对的上下文
@@ -138,6 +141,28 @@ public static class M3u8Parser
                     {
                         keyUri = ResolveUri(declaredKeyUri, baseUri);
                     }
+
+                    // IV 只在 AES-128 下有意义；此处不判加密类型而只记录声明值，
+                    // 是因为「声明了却没用」与「没声明」在后续解密逻辑里必须可区分
+                    if (attributes.TryGetValue("IV", out var declaredIv))
+                    {
+                        keyIv = declaredIv;
+                    }
+                }
+                else if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 媒体序号参与 IV 推导（未声明 IV 时使用），因此必须解析
+                    var sequenceText = line[(line.IndexOf(':') + 1)..].Trim();
+                    if (long.TryParse(sequenceText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sequence)
+                        && sequence >= 0)
+                    {
+                        mediaSequence = sequence;
+                    }
+                }
+                else if (line.StartsWith("#EXT-X-ENDLIST", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 出现该标签说明分片列表已完整，是点播（VOD）而非直播
+                    hasEndList = true;
                 }
                 else if (line.StartsWith("#EXT-X-MAP:", StringComparison.OrdinalIgnoreCase))
                 {
@@ -183,8 +208,14 @@ public static class M3u8Parser
             Segments = segments,
             Encryption = encryption,
             KeyUri = keyUri,
+            KeyIv = keyIv,
+            MediaSequence = mediaSequence,
             InitSegmentUri = initSegmentUri,
             TotalDuration = TimeSpan.FromSeconds(totalSeconds),
+            // 直播判定：有分片、不是主清单、且没有 ENDLIST。
+            // 「有分片」这一条不可省：主清单天然没有 ENDLIST，
+            // 若只看 ENDLIST 会把「多清晰度点播」误判成直播
+            IsLive = !isMasterPlaylist && segments.Count > 0 && !hasEndList,
             IsDrmProtected = isDrmProtected
         };
     }
