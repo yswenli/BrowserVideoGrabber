@@ -43,6 +43,7 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     private readonly Dictionary<string, MediaFetchResult> _textResponses = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (byte[] Content, string ContentType)> _byteAndFile = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _failures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _failureMessages = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 构造假抓取器。
@@ -68,6 +69,26 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     /// <summary>标记某 URL 抓取失败。</summary>
     public void Fail(string url) => _failures.Add(url);
 
+    /// <summary>
+    /// 标记某 URL 抓取失败，并指定失败原因文案。
+    /// </summary>
+    /// <param name="url">失败的 URL。</param>
+    /// <param name="message">失败原因，用于断言上层是否把该原因透传到用户可见的提示里。</param>
+    public void FailWithMessage(string url, string message)
+    {
+        _failures.Add(url);
+        _failureMessages[url] = message;
+    }
+
+    /// <summary>
+    /// 构造失败结果：优先使用预置的原因文案，便于测试断言真实错误是否被透传。
+    /// </summary>
+    /// <param name="url">失败的 URL。</param>
+    /// <param name="fallback">未预置原因时的兜底文案。</param>
+    /// <returns>失败结果。</returns>
+    private MediaFetchResult Failure(string url, string fallback)
+        => MediaFetchResult.Fail(_failureMessages.TryGetValue(url, out var message) ? message : fallback);
+
     /// <inheritdoc />
     public Task<MediaFetchResult> GetStringAsync(string url, RequestContext context, CancellationToken cancellationToken)
         => Task.FromResult(_textResponses.TryGetValue(url, out var result)
@@ -79,7 +100,7 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     {
         if (_failures.Contains(url))
         {
-            return Task.FromResult(MediaFetchResult.Fail($"字节获取失败：{url}"));
+            return Task.FromResult(Failure(url, $"字节获取失败：{url}"));
         }
 
         return Task.FromResult(_byteAndFile.TryGetValue(url, out var pair)
@@ -92,7 +113,7 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     {
         if (_failures.Contains(url))
         {
-            return Task.FromResult(MediaFetchResult.Fail($"分片获取失败：{url}"));
+            return Task.FromResult(Failure(url, $"分片获取失败：{url}"));
         }
 
         if (_byteAndFile.TryGetValue(url, out var pair))

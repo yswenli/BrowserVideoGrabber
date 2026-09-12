@@ -22,9 +22,9 @@
 *
 *****************************************************************************/
 
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using BrowserVideoGrabber.Core.Abstractions;
+using BrowserVideoGrabber.Core.Json;
 using BrowserVideoGrabber.Core.Configuration;
 
 namespace BrowserVideoGrabber.Infrastructure.Storage;
@@ -38,12 +38,7 @@ namespace BrowserVideoGrabber.Infrastructure.Storage;
 /// </remarks>
 public sealed class JsonAppSettingsStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    };
+    private static readonly JsonSerializerOptions SerializerOptions = JsonModelsContext.CreateOptions();
 
     private readonly IFileSystem _fileSystem;
     private readonly string _filePath;

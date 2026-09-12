@@ -175,10 +175,14 @@ public sealed class HttpDownloadHandler : IDownloadHandler
         }
         catch (Exception exception) when (IsTransient(exception))
         {
+            // 回退 ffmpeg 后 ffmpeg 会直接写 OutputPath，本次产生的 .part 分片再无人使用，必须清掉
+            Cleanup(artifacts);
             return await TryFallbackAsync(task, progress, cancellationToken, Describe(exception)).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
+            // 不可重试的失败：任务到此为止，半成品已无价值
+            Cleanup(artifacts);
             return DownloadResult.Fail(Describe(exception), isRetryable: false);
         }
     }
@@ -282,10 +286,19 @@ public sealed class HttpDownloadHandler : IDownloadHandler
         var assembledLength = _fileSystem.GetFileLength(assemblingPath);
         if (total.HasValue && assembledLength != total.Value)
         {
-            // 保留分片，让队列的下一次重试可以续传而不是从头再来
             _fileSystem.DeleteFile(assemblingPath);
+
+            // 还有重试机会时保留分片，让队列的下一次重试续传而不是从头再来；
+            // 已经是最后一次尝试则一并清掉，否则这些 .part 会永久留在输出目录里
+            var canResume = task.RetryCount < task.MaxRetryCount;
+            if (!canResume)
+            {
+                Cleanup(artifacts);
+            }
+
             return DownloadResult.Fail(
-                $"下载未完整：期望 {total.Value} 字节，实际 {assembledLength} 字节。已保留分片，重试将继续续传。",
+                $"下载未完整：期望 {total.Value} 字节，实际 {assembledLength} 字节。"
+                + (canResume ? "已保留分片，重试将继续续传。" : "已达到重试上限，已清理下载分片。"),
                 isRetryable: true);
         }
 

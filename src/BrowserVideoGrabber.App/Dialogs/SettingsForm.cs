@@ -44,8 +44,8 @@ public sealed class SettingsForm : Form
 {
     private const int LabelLeft = 16;
     private const int InputLeft = 124;
-    private const int InputWidth = 300;
-    private const int ButtonLeft = 432;
+    private const int InputWidth = 410;
+    private const int ButtonLeft = 542;
     private const int ButtonWidth = 90;
 
     private readonly Func<string?> _detectFfmpeg;
@@ -55,7 +55,9 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _concurrencyBox;
     private readonly NumericUpDown _segmentBox;
     private readonly TextBox _userAgentBox;
-    private readonly CheckBox _sniffEnabledBox;
+    private readonly CheckBox _restoreTabsBox;
+    private readonly NumericUpDown _maxTabsBox;
+    private readonly NumericUpDown _maxHistoryBox;
     private readonly Label _detectionLabel;
 
     /// <summary>
@@ -74,9 +76,12 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(540, 400);
+        ClientSize = new Size(650, 470);
         Font = new Font("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
+
+        // 统一窗体图标：与主控窗体保持一致，避免设置对话框出现不同的任务栏图标
+        Icon = AppIcon.Load();
 
         _ffmpegPathBox = CreateTextBox(18, settings.FfmpegPath);
         var browseFfmpegButton = CreateButton("浏览…", 18, OnBrowseFfmpegClick);
@@ -85,7 +90,7 @@ public sealed class SettingsForm : Form
         {
             Left = InputLeft,
             Top = 52,
-            Width = InputWidth + ButtonWidth + 8,
+            Width = InputWidth,
             Height = 20,
             ForeColor = Color.FromArgb(110, 110, 110),
             Text = "留空表示自动探测（应用目录 → 系统 PATH → 常见安装位置）。"
@@ -105,15 +110,21 @@ public sealed class SettingsForm : Form
         _userAgentBox = CreateTextBox(188, settings.UserAgent);
         var userAgentHint = CreateHint("留空则沿用内置浏览器当前的 User-Agent。", 220);
 
-        _sniffEnabledBox = new CheckBox
+        _restoreTabsBox = new CheckBox
         {
             Left = InputLeft,
             Top = 252,
             Width = InputWidth,
             Height = 24,
-            Text = "启动后自动开启页面视频嗅探",
-            Checked = settings.SniffEnabled
+            Text = "启动时恢复上次关闭时的标签页",
+            Checked = settings.RestoreTabs
         };
+
+        _maxTabsBox = CreateNumeric(310, 1, 20, settings.MaxTabs);
+        var maxTabsHint = CreateHint("同时打开的标签页上限。每个标签都会占用内存。", 310);
+
+        _maxHistoryBox = CreateNumeric(344, 50, 5000, settings.MaxHistoryEntries);
+        var maxHistoryHint = CreateHint("历史记录保留条数，超出后淘汰最旧。", 344);
 
         var okButton = new Button
         {
@@ -155,7 +166,13 @@ public sealed class SettingsForm : Form
             CreateLabel("User-Agent", 191),
             _userAgentBox,
             userAgentHint,
-            _sniffEnabledBox,
+            _restoreTabsBox,
+            CreateLabel("标签页上限", 313),
+            _maxTabsBox,
+            maxTabsHint,
+            CreateLabel("历史上限", 347),
+            _maxHistoryBox,
+            maxHistoryHint,
             okButton,
             cancelButton
         ]);
@@ -345,7 +362,9 @@ public sealed class SettingsForm : Form
             MaxConcurrency = (int)_concurrencyBox.Value,
             HttpSegmentCount = (int)_segmentBox.Value,
             UserAgent = NullIfEmpty(_userAgentBox.Text),
-            SniffEnabled = _sniffEnabledBox.Checked
+            RestoreTabs = _restoreTabsBox.Checked,
+            MaxTabs = (int)_maxTabsBox.Value,
+            MaxHistoryEntries = (int)_maxHistoryBox.Value
         };
 
         DialogResult = DialogResult.OK;
@@ -360,3 +379,4 @@ public sealed class SettingsForm : Form
     private static string? NullIfEmpty(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
+

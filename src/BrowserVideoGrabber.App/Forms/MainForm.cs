@@ -25,10 +25,13 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using BrowserVideoGrabber.App.Binding;
+using BrowserVideoGrabber.App.Controls;
 using BrowserVideoGrabber.App.Dialogs;
+using BrowserVideoGrabber.App.Formatting;
 using BrowserVideoGrabber.App.Panes;
 using BrowserVideoGrabber.Core.Abstractions;
 using BrowserVideoGrabber.Core.Models;
+using BrowserVideoGrabber.Infrastructure.Sniffing;
 
 namespace BrowserVideoGrabber.App.Forms;
 
@@ -65,8 +68,16 @@ public sealed class MainForm : Form
 
     private SniffListBinder? _sniffBinder;
     private DownloadListBinder? _downloadBinder;
-    private IVideoSniffer? _sniffer;
-    private IRequestContextProvider? _contextProvider;
+
+    /// <summary>
+    /// 多标签嗅探协调器。
+    /// </summary>
+    /// <remarks>
+    /// 类型为具体类而非 <see cref="IVideoSniffer"/>：主窗体需要调用其
+    /// <c>Attach</c> / <c>Detach</c> 为每个标签增删嗅探器，而这一职责不在抽象接口上。
+    /// 界面其余部分（绑定器、嗅探面板）仍只依赖 <see cref="IVideoSniffer"/>。
+    /// </remarks>
+    private SniffCoordinator? _sniffer;
     private bool _closingHandled;
 
     /// <summary>
@@ -83,6 +94,9 @@ public sealed class MainForm : Form
         MinimumSize = new Size(1024, 680);
         Font = new Font("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
+
+        // 统一窗体图标：所有窗口共享 favicon.ico，换图标只改一处（AppIcon.cs）
+        Icon = AppIcon.Load();
 
         // 刻意不在初始化器里设置 Panel1MinSize / Panel2MinSize：
         // 此刻控件宽度仍是默认的 150，而 WinForms 在设置最小尺寸时会连带校验
@@ -145,8 +159,6 @@ public sealed class MainForm : Form
         _warningBanner.Controls.Add(_warningLabel);
         _warningBanner.Controls.Add(warningSettingsButton);
 
-        // 停靠顺序即层级顺序：先加填充控件，再加边缘控件；
-        // 最后加入的 Top 控件最贴近窗体上边缘（警告横幅须位于工具栏之上）
         Controls.Add(_outerSplit);
         Controls.Add(mainToolStrip);
         Controls.Add(statusStrip);
@@ -167,42 +179,57 @@ public sealed class MainForm : Form
     /// <returns>工具栏控件。</returns>
     private ToolStrip BuildMainToolStrip()
     {
-        var settingsButton = new ToolStripButton("设置")
-        {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
-            ToolTipText = "配置 ffmpeg 路径、输出目录、并发数与分片数"
-        };
-        settingsButton.Click += OnSettingsClick;
-
-        var openOutputButton = new ToolStripButton("打开输出目录")
-        {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
-            ToolTipText = "在资源管理器中打开下载文件的保存目录"
-        };
-        openOutputButton.Click += OnOpenOutputDirectoryClick;
-
-        var openTaskFileButton = new ToolStripButton("打开任务文件")
-        {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
-            ToolTipText = "打开 tasks.json 所在目录，便于排查任务持久化问题"
-        };
-        openTaskFileButton.Click += OnOpenSettingsDirectoryClick;
+        var settingsButton = CreateToolButton("⚙", "设置", "配置 ffmpeg 路径、输出目录、并发数与分片数", OnSettingsClick);
+        var openOutputButton = CreateToolButton("📂", "输出目录", "在资源管理器中打开下载文件的保存目录", OnOpenOutputDirectoryClick);
+        var openTaskFileButton = CreateToolButton("📄", "任务文件", "打开 tasks.json 所在目录，便于排查任务持久化问题", OnOpenSettingsDirectoryClick);
+        var favoritesButton = CreateToolButton("⭐", "收藏", "查看与管理已收藏的地址", OnFavoritesClick);
+        var historyButton = CreateToolButton("🕘", "历史", "查看与管理访问过的页面", OnHistoryClick);
+        var newTabButton = CreateToolButton("＋", "新建标签", $"新建一个标签页（最多 {_host.Settings.MaxTabs} 个）", OnNewTabClick);
+        var aboutButton = CreateToolButton("ⓘ", "关于", "查看程序名称、简介与作者等信息", OnAboutClick);
 
         var toolbar = new ToolStrip
         {
             GripStyle = ToolStripGripStyle.Hidden,
-            RenderMode = ToolStripRenderMode.System,
-            Dock = DockStyle.Top
+            RenderMode = ToolStripRenderMode.Professional,
+            Renderer = new CapsuleToolStripRenderer(),
+            Dock = DockStyle.Top,
+            Padding = new Padding(4, 2, 4, 2)
         };
 
         toolbar.Items.AddRange(
         [
+            newTabButton,
+            favoritesButton,
+            historyButton,
+            new ToolStripSeparator(),
             settingsButton,
             openOutputButton,
-            openTaskFileButton
+            openTaskFileButton,
+            new ToolStripSeparator(),
+            aboutButton
         ]);
 
         return toolbar;
+    }
+
+    /// <summary>
+    /// 创建主工具栏按钮（图标 + 文字，胶囊风格，与浏览器面板一致）。
+    /// </summary>
+    private static ToolStripButton CreateToolButton(
+        string glyph, string label, string tooltip, EventHandler onClick)
+    {
+        var button = new ToolStripButton
+        {
+            Text = label,
+            Image = CapsuleToolStripRenderer.CreateGlyphIcon(glyph),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Margin = new Padding(4, 0, 4, 0),
+            Padding = new Padding(6, 2, 6, 2),
+            ToolTipText = tooltip
+        };
+
+        button.Click += onClick;
+        return button;
     }
 
     /// <summary>
@@ -210,9 +237,19 @@ public sealed class MainForm : Form
     /// </summary>
     private void WireEvents()
     {
-        _browserPane.SniffToggled += OnSniffToggled;
         _browserPane.MessageReported += (_, message) => SetStatus(message);
-        _browserPane.AddressChanged += (_, url) => SetStatus($"已打开：{url}");
+
+        // 多标签：新标签就绪后挂嗅探器，关闭标签时解除挂接
+        _browserPane.TabAttached += OnTabAttached;
+        _browserPane.TabDetaching += OnTabDetaching;
+
+        // 页面右键「下载视频」：扫描当前标签页面，把视频/直播流嗅探进列表
+        _browserPane.VideoScanRequested += OnVideoScanRequested;
+
+        // 导航成功才写历史：失败地址（打不开的站点）不该污染历史列表
+        _browserPane.Navigated += OnBrowserNavigated;
+        _browserPane.FavoriteRequested += OnFavoriteRequested;
+        _browserPane.ActiveTabChanged += (_, _) => SetFavoriteButtonState();
 
         _sniffPane.DownloadRequested += OnDownloadRequested;
 
@@ -234,6 +271,138 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
+    /// 新标签内核就绪：为该标签挂上嗅探器。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="tab">新标签。</param>
+    private void OnTabAttached(object? sender, BrowserTab tab)
+        => _sniffer?.Attach(tab.WebView);
+
+    /// <summary>
+    /// 页面右键「下载视频」：扫描该标签当前页面，把视频/直播流嗅探进列表。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="tab">发起扫描的标签。</param>
+    /// <remarks>
+    /// 已有地址不会重复处理：嗅探器内部的家族去重索引会忽略列表中已存在的资源，
+    /// 因此重复右键既不会刷屏也不会产生重复行。
+    /// </remarks>
+    private async void OnVideoScanRequested(object? sender, BrowserTab tab)
+    {
+        if (_sniffer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _sniffer.SniffPageAsync(tab.WebView).ConfigureAwait(true);
+            SetStatus("已扫描当前页面：发现的视频与直播流已加入嗅探列表（已有地址未重复处理）。");
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
+        {
+            SetStatus("扫描当前页面失败：页面可能正在跳转，请稍后再试。");
+        }
+    }
+
+    /// <summary>
+    /// 标签即将关闭：解除该标签的嗅探挂接。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="tab">待关闭的标签。</param>
+    /// <remarks>
+    /// 必须在释放标签的 <c>WebView2</c> <b>之前</b>解除挂接：
+    /// 嗅探器持有内核事件订阅，先释放控件会让退订操作抛异常。
+    /// </remarks>
+    private void OnTabDetaching(object? sender, BrowserTab tab)
+        => _sniffer?.Detach(tab.WebView);
+
+    /// <summary>
+    /// 活动标签导航完成：写入历史记录。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">导航事件参数。</param>
+    private void OnBrowserNavigated(object? sender, BrowserTabNavigatedEventArgs e)
+    {
+        if (!e.IsSuccess || string.IsNullOrWhiteSpace(e.Url)
+            || e.Url.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _host.History.Record(e.Tab.Title, e.Url);
+        SetFavoriteButtonState();
+        SetStatus($"已打开：{e.Url}");
+    }
+
+    /// <summary>
+    /// 收藏 / 取消收藏当前页面。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">事件参数，携带操作前是否已收藏。</param>
+    private void OnFavoriteRequested(object? sender, FavoriteToggleEventArgs e)
+    {
+        var url = _browserPane.CurrentUrl;
+
+        if (string.IsNullOrWhiteSpace(url)
+            || url.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("当前页面没有可收藏的地址。");
+            return;
+        }
+
+        if (e.IsFavorited)
+        {
+            // 已收藏 → 执行取消
+            var existing = _host.Favorites.Load().FirstOrDefault(x =>
+                string.Equals(x.Url.TrimEnd('/'), url.TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
+
+            if (existing is not null && _host.Favorites.Remove(existing.Id))
+            {
+                SetFavoriteButtonState();
+                SetStatus($"已取消收藏：{existing.Title}");
+            }
+            else
+            {
+                SetStatus("未找到对应的收藏记录。");
+            }
+        }
+        else
+        {
+            // 未收藏 → 执行添加
+            var title = string.IsNullOrWhiteSpace(_browserPane.CurrentTitle) ? url : _browserPane.CurrentTitle;
+            var added = _host.Favorites.Add(new FavoriteEntry { Title = title, Url = url });
+
+            if (added)
+            {
+                SetFavoriteButtonState();
+                SetStatus($"已收藏：{title}");
+            }
+            else
+            {
+                SetStatus("该地址已在收藏中。");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 根据当前页面是否已收藏更新收藏按钮的图标与文案。
+    /// </summary>
+    private void SetFavoriteButtonState()
+    {
+        var url = _browserPane.CurrentUrl;
+
+        if (string.IsNullOrWhiteSpace(url)
+            || url.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+        {
+            _browserPane.SetFavoriteState(false);
+            return;
+        }
+
+        _browserPane.SetFavoriteState(_host.Favorites.ContainsUrl(url));
+    }
+
+    /// <summary>
     /// 窗体载入：设置拆分条位置、初始化浏览器、装配嗅探器并恢复历史任务。
     /// </summary>
     /// <param name="sender">事件源。</param>
@@ -248,12 +417,8 @@ public sealed class MainForm : Form
 
             await InitializeBrowserAsync();
 
-            _browserPane.SetSniffEnabledWithoutNotify(_host.Settings.SniffEnabled);
-
             await _host.RestoreAsync().ConfigureAwait(true);
             _downloadBinder?.RefreshAll();
-
-            ApplySniffEnabled(_host.Settings.SniffEnabled);
 
             SetStatus("就绪。输入网址后浏览页面，右上角将自动列出检测到的视频资源。");
         }
@@ -276,15 +441,28 @@ public sealed class MainForm : Form
     /// <returns>表示异步初始化的任务。</returns>
     private async Task InitializeBrowserAsync()
     {
-        var initialUrl = string.IsNullOrWhiteSpace(_host.Settings.LastUrl)
-            ? DefaultHomeUrl
-            : _host.Settings.LastUrl;
+        _browserPane.MaxTabs = _host.Settings.MaxTabs > 0 ? _host.Settings.MaxTabs : 10;
 
-        await _browserPane.InitializeAsync(initialUrl).ConfigureAwait(true);
-
-        _sniffer = _host.CreateSniffer(_browserPane.WebView);
-        _contextProvider = _host.CreateContextProvider(_browserPane.WebView);
+        // 协调器与绑定器必须先于标签创建：标签在初始化过程中就会触发 TabAttached，
+        // 若此时协调器尚不存在，这些标签将永远挂不上嗅探器
+        _sniffer = _host.CreateSnifferCoordinator();
         _sniffBinder = new SniffListBinder(_sniffer, _sniffPane);
+
+        var restored = _host.LoadTabs();
+
+        if (restored.Count > 0)
+        {
+            await _browserPane.InitializeAsync(restored).ConfigureAwait(true);
+            SetStatus($"已恢复上次会话的 {restored.Count} 个标签页。");
+            return;
+        }
+
+        // 未从会话恢复时沿用旧行为：优先记忆的最后地址，否则首页
+        await _browserPane.InitializeAsync(null).ConfigureAwait(true);
+
+        _browserPane.Navigate(string.IsNullOrWhiteSpace(_host.Settings.LastUrl)
+            ? DefaultHomeUrl
+            : _host.Settings.LastUrl);
     }
 
     /// <summary>
@@ -356,34 +534,6 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// 按开关状态启动或停止嗅探。
-    /// </summary>
-    /// <param name="enabled">是否开启。</param>
-    private void ApplySniffEnabled(bool enabled)
-    {
-        if (_sniffer is null)
-        {
-            return;
-        }
-
-        if (enabled)
-        {
-            _sniffer.Start();
-        }
-        else
-        {
-            _sniffer.Stop();
-        }
-    }
-
-    /// <summary>嗅探开关切换。</summary>
-    private void OnSniffToggled(object? sender, bool enabled)
-    {
-        ApplySniffEnabled(enabled);
-        SetStatus(enabled ? "已开启页面视频嗅探。" : "已关闭页面视频嗅探（已捕获的结果保留）。");
-    }
-
-    /// <summary>
     /// 把嗅探到的资源加入下载队列。
     /// </summary>
     /// <param name="sender">事件源。</param>
@@ -401,10 +551,12 @@ public sealed class MainForm : Form
             var outputPath = _host.BuildOutputPath(video);
 
             // 入队时冻结浏览器会话的鉴权信息：下载可能在其后才真正开始，
-            // 届时用户可能已切换页面，再取 Referer 就不准了
-            var context = _contextProvider is null
+            // 届时用户可能已切换页面，再取 Referer 就不准了。
+            // 多标签下取「活动标签」的会话——用户通常从正在看的那一页发起下载。
+            var webView = _browserPane.ActiveWebView;
+            var context = webView is null
                 ? RequestContext.CreateDefault(_host.Settings.UserAgent)
-                : await _contextProvider.CreateAsync(video.Url).ConfigureAwait(true);
+                : await _host.CreateContextProvider(webView).CreateAsync(video.Url).ConfigureAwait(true);
 
             var task = new DownloadTask
             {
@@ -511,6 +663,30 @@ public sealed class MainForm : Form
                 break;
 
             case DownloadAction.ClearFinished:
+                var count = _host.Queue.Tasks.Count(t =>
+                    t.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Canceled);
+
+                if (count == 0)
+                {
+                    SetStatus("没有可清空的已结束任务。");
+                    break;
+                }
+
+                var answer = MessageBox.Show(
+                    this,
+                    $"确定要清空全部 {count} 个已结束的任务吗？{Environment.NewLine}{Environment.NewLine}" +
+                    "此操作不可撤销。",
+                    "确认清空",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (answer != DialogResult.OK)
+                {
+                    SetStatus("已取消清空操作。");
+                    break;
+                }
+
                 var removed = _host.Queue.ClearFinished();
                 _downloadBinder?.RefreshAll();
 
@@ -540,6 +716,7 @@ public sealed class MainForm : Form
             Format = task.Format,
             OutputPath = task.OutputPath,
             Title = task.Title,
+            MaxRetryCount = task.MaxRetryCount,
             Context = task.Context.Clone()
         };
 
@@ -650,6 +827,34 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>打开「关于」对话框。</summary>
+    private void OnAboutClick(object? sender, EventArgs e)
+    {
+        using var dialog = new AboutForm();
+        dialog.ShowDialog(this);
+    }
+
+    /// <summary>打开收藏管理对话框。</summary>
+    /// <remarks>对话框只抛网址，由本窗体决定在活动标签打开。</remarks>
+    private void OnFavoritesClick(object? sender, EventArgs e)
+    {
+        using var dialog = new FavoritesForm(_host.Favorites);
+        dialog.OpenRequested += (_, url) => _browserPane.Navigate(url);
+        dialog.ShowDialog(this);
+    }
+
+    /// <summary>打开历史记录对话框。</summary>
+    private void OnHistoryClick(object? sender, EventArgs e)
+    {
+        using var dialog = new HistoryForm(_host.History);
+        dialog.OpenRequested += (_, url) => _browserPane.Navigate(url);
+        dialog.ShowDialog(this);
+    }
+
+    /// <summary>新建一个空白标签页。</summary>
+    private async void OnNewTabClick(object? sender, EventArgs e)
+        => await _browserPane.AddTabAsync(null).ConfigureAwait(true);
+
     /// <summary>打开设置对话框。</summary>
     private void OnSettingsClick(object? sender, EventArgs e)
     {
@@ -666,12 +871,8 @@ public sealed class MainForm : Form
         _downloadBinder?.RefreshAll();
         UpdateFfmpegStatus();
 
-        // 请求上下文提供者持有设置快照，重建后新的 User-Agent 才会生效
-        if (_browserPane.IsCoreReady)
-        {
-            _contextProvider = _host.CreateContextProvider(_browserPane.WebView);
-        }
-
+        // 请求上下文提供者持有设置快照，但它在每次下载时按活动标签即时创建，
+        // 因此这里无需额外重建，新的 User-Agent 会自动生效
         SetStatus("设置已保存并立即生效。");
     }
 
@@ -710,11 +911,62 @@ public sealed class MainForm : Form
             return;
         }
 
+        // 任务管理器杀进程或系统关机时不走这条路径，只有用户主动关闭才弹确认
+        if (e.CloseReason == CloseReason.UserClosing)
+        {
+            var runningTasks = _host.Queue.Tasks
+                .Where(t => t.Status is DownloadStatus.Running or DownloadStatus.Pending)
+                .ToList();
+
+            if (runningTasks.Count > 0)
+            {
+                var names = string.Join(Environment.NewLine,
+                    runningTasks.Select(t => $"· {t.Title}（{DisplayText.Status(t.Status)}）"));
+
+                var answer = MessageBox.Show(
+                    this,
+                    $"当前有 {runningTasks.Count} 个任务尚未结束：{Environment.NewLine}{Environment.NewLine}" +
+                    $"{names}{Environment.NewLine}{Environment.NewLine}" +
+                    "确定要退出吗？退出后正在下载的任务将被中止。",
+                    "确认退出",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (answer != DialogResult.OK)
+                {
+                    e.Cancel = true;
+                    _closingHandled = false;
+                    return;
+                }
+            }
+            else
+            {
+                var answer = MessageBox.Show(
+                    this,
+                    "确定要退出程序吗？",
+                    "确认退出",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+
+                if (answer != DialogResult.OK)
+                {
+                    e.Cancel = true;
+                    _closingHandled = false;
+                    return;
+                }
+            }
+        }
+
         _closingHandled = true;
 
         try
         {
             _host.RememberLastUrl(_browserPane.CurrentUrl);
+
+            // 保存会话标签供下次恢复（开关关闭时 SaveTabs 内部会直接跳过）
+            _host.SaveTabs(_browserPane.GetTabUrls());
 
             // 先停掉界面侧的刷新，再让队列停摆，避免关闭过程中还在往已销毁的控件投递刷新
             _downloadBinder?.FlushProgress();

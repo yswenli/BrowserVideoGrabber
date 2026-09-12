@@ -11,7 +11,7 @@
 *创建人： yswenli
 *电子邮箱：yswenli@outlook.com
 *创建时间：2026/9/13 03:20:00
-*描述：请求上下文头块构建的单元测试，重点验证 Origin 请求头不再外发。
+*描述：请求上下文头块构建的单元测试，重点验证 Origin 请求头会随页面来源一并外发。
 *
 *=================================================
 *修改标记
@@ -30,18 +30,24 @@ namespace BrowserVideoGrabber.Tests.Models;
 /// <see cref="RequestContext"/> 的行为验证。
 /// </summary>
 /// <remarks>
-/// 本组用例的核心是一条实测结论：请求携带 <c>Origin</c> 时，目标 CDN 会对<b>每一个</b>分片
-/// 返回同一张 56024 字节的占位 JPEG（HTTP 200，内容为一段格式合法的 8 秒 TS），
-/// 而 ffmpeg 会把它当作正常分片封装进成品，最终得到一个「能打开但不是视频」的 mp4。
-/// 因此「头块中绝不出现 Origin」必须被测试固化，而不是留给后来者凭印象判断。
+/// <para>
+/// 本组用例的核心是<b>纠正过一次方向</b>的实测结论：早期认为「携带 <c>Origin</c> 会让 CDN 对
+/// 每个分片返回同一张 56024 字节占位 JPEG」，于是把该头从两条下载链路中一并移除。
+/// 复测推翻了这个判断 —— 真正的原因是 <c>Origin</c> <b>取值错误</b>（取了媒体地址自身的
+/// origin），CDN 将其判为来源不合法才回退诱饵；取来源页面的 origin 反而能拿到真实内容。
+/// </para>
+/// <para>
+/// 反向的坑同样致命：不发该头时 CDN 同样回诱饵，且诱饵是 HTTP 200、首字节为合法 TS 同步字
+/// 的内容，ffmpeg 会顺利封装并退出码 0，用户拿到「能打开却不是目标视频」的 mp4。
+/// 因此「头块中必须出现 Origin」要用测试固化，防止后来者凭旧注释把它再删掉。
 /// </remarks>
 public sealed class RequestContextTests
 {
     /// <summary>
-    /// 即使上下文中带 Origin，头块也不得包含该头。
+    /// 上下文带 Origin 时，头块必须带上该头 —— 缺失会让 CDN 回退占位诱饵。
     /// </summary>
     [Fact]
-    public void BuildHeaderBlock_ShouldNotEmitOrigin_EvenWhenContextCarriesIt()
+    public void BuildHeaderBlock_ShouldEmitOrigin_WhenContextCarriesIt()
     {
         var context = new RequestContext
         {
@@ -53,7 +59,7 @@ public sealed class RequestContextTests
 
         var block = context.BuildHeaderBlock();
 
-        Assert.DoesNotContain("Origin:", block, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Origin: https://www.example.com", block, StringComparison.Ordinal);
         Assert.Contains("Referer: https://www.example.com/watch/1", block, StringComparison.Ordinal);
         Assert.Contains("User-Agent: Mozilla/5.0 Test", block, StringComparison.Ordinal);
         Assert.Contains("Cookie: sid=abc", block, StringComparison.Ordinal);
@@ -85,11 +91,10 @@ public sealed class RequestContextTests
     }
 
     /// <summary>
-    /// Origin 属性本身必须保留：它参与设置持久化，也是排查「分片全是占位图」时的重要线索。
-    /// 停止外发与删除字段是两件事。
+    /// Origin 属性必须能被拷贝：它参与任务持久化，下载时复用同一份上下文才能保持来源一致。
     /// </summary>
     [Fact]
-    public void Clone_ShouldPreserveOriginValue_ForDiagnostics()
+    public void Clone_ShouldPreserveOriginValue()
     {
         var context = new RequestContext { Origin = "https://www.example.com" };
 

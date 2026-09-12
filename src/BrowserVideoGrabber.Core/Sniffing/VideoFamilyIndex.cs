@@ -265,10 +265,22 @@ public sealed class VideoFamilyIndex
             {
                 _familyByReportedUrl[fingerprint] = familyKey;
 
-                if (rank > family.Rank || (rank == family.Rank && IsRicher(candidate, family.Video)))
+                // 分片永远不触发 Update：
+                //   不管命中的是清单家族还是另一个分片家族，分片本身不可单独下载，
+                //   没有资格成为"家族代表"。清单命中时（rank 2 > 分片 rank 0）自然会走下面的 Update 分支。
+                if (rank == VideoEntryRank.Fragment)
+                {
+                    return new VideoAdmission(VideoAdmissionKind.Ignored, familyKey, family.Video);
+                }
+
+                // 「重新签名」也必须算升级：同一个地址换了新的动态签名，
+                // 说明浏览器刚刚又请求了一次，这条才是最新的、能用的那一条
+                if (rank > family.Rank
+                    || (rank == family.Rank
+                        && (IsRicher(candidate, family.Video) || IsResigned(candidate, family.Video))))
                 {
                     // 原地升级：沿用原标识，界面按标识找到旧行并刷新各列
-                    family.Video = candidate.WithId(family.Id);
+                    family.Video = MergeMetadata(candidate, family.Video).WithId(family.Id);
                     family.Rank = rank;
 
                     return new VideoAdmission(VideoAdmissionKind.Update, familyKey, family.Video);
@@ -300,6 +312,15 @@ public sealed class VideoFamilyIndex
                 // 分片家族按目录占位：同目录的后续分片归入同一行，
                 // 而稍后出现的清单可以复用该家族键，把这一行原地升级掉
                 _familyByFragmentDirectory[fragmentDirectory] = familyKey;
+            }
+
+            // 分片创建家族但不上报到 UI —— 分片本身不可直接下载，
+            // 必须等清单（Manifest rank 2）来认领后才能作为家族代表出现在列表里。
+            // 如果后续清单到达，会 ResolveFamilyKey 命中上面占位的家族键，
+            // 以更高 rank 触发 Update 把清单行升级上去。
+            if (rank == VideoEntryRank.Fragment)
+            {
+                return new VideoAdmission(VideoAdmissionKind.Ignored, familyKey, accepted);
             }
 
             return new VideoAdmission(VideoAdmissionKind.New, familyKey, accepted);
@@ -466,9 +487,67 @@ public sealed class VideoFamilyIndex
     /// 同一地址会被两条链路先后捕获：JS 注入只能拿到地址，网络响应监听还能拿到响应头与清晰度。
     /// 若只比较等级，先到的 JS 条目会让后到的网络条目被丢弃，列表上的「分辨率」就会长期为空。
     /// </remarks>
+    /// <summary>
+    /// 判断候选是否为同一地址的「重新签名」版本。
+    /// </summary>
+    /// <param name="candidate">新到达的候选。</param>
+    /// <param name="existing">家族中已保存的条目。</param>
+    /// <returns>
+    /// 两者归一化地址（已去查询串）相同、但原始地址不同时返回 true，即仅查询串发生了变化。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>为什么必须识别</b>：流媒体地址普遍带一次性签名（如 <c>?verify=&lt;时间戳&gt;-&lt;md5&gt;</c>）。
+    /// 播放器在播放过程中会不断用新签名重新请求同一个清单，而页面 HTML 里预置的那条往往是旧的。
+    /// 若只按「元数据更丰富」判断是否升级，新签名会被判为 <see cref="VideoAdmissionKind.Ignored"/>，
+    /// 界面上就永远留着第一次那条过期地址 —— 表现为「页面能正常播放，工具下载却说地址失效」。
+    /// </para>
+    /// <para>
+    /// <b>必须比较归一化地址而非直接判 URL 不同</b>：分片家族按所在目录折叠，
+    /// 同一目录下的 <c>seg-1.ts</c> 与 <c>seg-2.ts</c> 地址本就不同，却不是重新签名，
+    /// 若只判「地址不同」会把每个分片都当成一次升级，分片折叠随之失效。
+    /// </para>
+    /// </remarks>
+    private static bool IsResigned(SniffedVideo candidate, SniffedVideo existing)
+        => !string.Equals(candidate.Url, existing.Url, StringComparison.Ordinal)
+           && string.Equals(
+               VideoUrlMatcher.Fingerprint(candidate.Url),
+               VideoUrlMatcher.Fingerprint(existing.Url),
+               StringComparison.Ordinal);
+
+    /// <summary>
+    /// 以候选为准合并旧条目的元数据。
+    /// </summary>
+    /// <param name="candidate">新到达的候选（其地址与来源时间为准）。</param>
+    /// <param name="existing">家族中已保存的条目（用于补齐候选缺失的元数据）。</param>
+    /// <returns>合并后的新条目。</returns>
+    /// <remarks>
+    /// 地址取候选，因为最新签名才是可用的；而分辨率、码率、Content-Type 等信息
+    /// 可能只出现在先到达的那条上（例如网络响应链路有 Content-Type、JS Hook 链路没有），
+    /// 直接整体替换会把已获得的描述信息弄丢，故逐字段从旧条目补齐。
+    /// </remarks>
+    private static SniffedVideo MergeMetadata(SniffedVideo candidate, SniffedVideo existing) => new()
+    {
+        Url = candidate.Url,
+        NormalizedUrl = string.IsNullOrEmpty(candidate.NormalizedUrl)
+            ? existing.NormalizedUrl
+            : candidate.NormalizedUrl,
+        Format = candidate.Format,
+        ContentType = candidate.ContentType ?? existing.ContentType,
+        Resolution = candidate.Resolution ?? existing.Resolution,
+        Bandwidth = candidate.Bandwidth ?? existing.Bandwidth,
+        DurationSeconds = candidate.DurationSeconds ?? existing.DurationSeconds,
+        ContentLength = candidate.ContentLength ?? existing.ContentLength,
+        Source = candidate.Source,
+        PageTitle = candidate.PageTitle ?? existing.PageTitle,
+        DetectedAt = candidate.DetectedAt
+    };
+
     private static bool IsRicher(SniffedVideo candidate, SniffedVideo existing)
         => (!string.IsNullOrEmpty(candidate.Resolution) && string.IsNullOrEmpty(existing.Resolution))
         || (candidate.Bandwidth.HasValue && !existing.Bandwidth.HasValue)
+        || (candidate.DurationSeconds.HasValue && !existing.DurationSeconds.HasValue)
+        || (candidate.ContentLength.HasValue && !existing.ContentLength.HasValue)
         || (!string.IsNullOrEmpty(candidate.ContentType) && string.IsNullOrEmpty(existing.ContentType));
 
     /// <summary>

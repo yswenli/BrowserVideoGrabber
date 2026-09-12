@@ -36,13 +36,34 @@ namespace BrowserVideoGrabber.Core.Sniffing;
 /// 所有链路产出的原始信息都必须经过本类过滤，才能保证界面列表不会混入图片、脚本等噪声。
 /// </para>
 /// <para>
-/// 判定优先级：<b>先看 Content-Type，再看 URL 后缀</b>。
-/// 这样做的原因是：很多流媒体地址伪装成 <c>.jpg</c> 或以无扩展名结尾，
-/// 而响应头中的媒体类型是站点自己声明的，可信度更高。
+/// 判定优先级：<b>URL 明确指向视频格式 → URL 明确是图片/音频（仅协议专属 MIME 可翻案）→ Content-Type</b>。
+/// URL 后缀是文件本身的扩展名，不受服务端 MIME 错标影响，因此优先级最高：
+/// 无论 Content-Type 是 <c>audio/mpegurl</c>（m3u8 的标准 MIME）、<c>video/mp2t</c>
+/// 还是 <c>text/plain</c> 等错标值，<c>.m3u8</c> 一律按清单处理。
+/// Content-Type 只负责两件事：URL 无定论时识别格式；URL 是图片/音频后缀时
+/// 用流媒体协议专属的强信号（如 <c>video/mp2t</c>）把伪装成分片的资源翻案。
 /// </para>
 /// </remarks>
 public static class VideoUrlMatcher
 {
+    /// <summary>
+    /// 明确指向图片的后缀集合。命中即拒绝，不再检查 Content-Type。
+    /// </summary>
+    /// <remarks>
+    /// 这是最可靠的拒绝证据：后缀是文件本身的扩展名，不受服务端 MIME 错误声明的影响。
+    /// 覆盖常见的位图（jpeg/png/webp/gif/bmp/heic/avif）与矢量（svg/ico）。
+    /// </remarks>
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".heic", ".heif", ".avif", ".tif", ".tiff", ".svg"
+    };
+
+    /// <summary>明确指向音频的后缀集合，同样不是视频。</summary>
+    private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus", ".ape", ".aiff"
+    };
+
     /// <summary>URL 后缀到格式的映射表。使用不区分大小写的比较器，兼容站点的大小写混用。</summary>
     private static readonly Dictionary<string, VideoFormat> ExtensionMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -51,25 +72,37 @@ public static class VideoUrlMatcher
         [".ts"] = VideoFormat.Ts,
         [".m4s"] = VideoFormat.M4s,
         [".mp4"] = VideoFormat.Mp4,
-        [".mpd"] = VideoFormat.Mpd
+        [".mpd"] = VideoFormat.Mpd,
+        [".ism"] = VideoFormat.Ismc,
+        [".ismc"] = VideoFormat.Ismc
     };
 
     /// <summary>
-    /// Content-Type 到格式的映射表。
+    /// <b>强信号</b> Content-Type 映射：这些 MIME 是流媒体协议专属的，绝不会被误用到非视频资源上。
+    /// 即便 URL 后缀看起来像图片，也信任 Content-Type。
     /// </summary>
     /// <remarks>
-    /// 刻意不收录 <c>application/octet-stream</c>：它是通用二进制类型，
-    /// 图片、压缩包、字体都可能是它，收进来会造成大量误报。
+    /// 典型场景：某些 CDN 把 TS 分片伪装成 <c>.jpeg</c> 后缀（如 <c>video0.jpeg</c>），
+    /// 但 Content-Type 正确返回 <c>video/mp2t</c> —— 这其实是有效的 TS 分片，必须接受。
     /// </remarks>
-    private static readonly Dictionary<string, VideoFormat> ContentTypeMap = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, VideoFormat> StrongContentTypeMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["application/vnd.apple.mpegurl"] = VideoFormat.M3u8,
         ["application/x-mpegurl"] = VideoFormat.M3u8,
         ["audio/mpegurl"] = VideoFormat.M3u8,
         ["audio/x-mpegurl"] = VideoFormat.M3u8,
         ["application/dash+xml"] = VideoFormat.Mpd,
+        ["application/vnd.ms-sstr+xml"] = VideoFormat.Ismc,
+        ["video/mp2t"] = VideoFormat.Ts
+    };
+
+    /// <summary>
+    /// <b>弱信号</b> Content-Type 映射：这些 MIME 在极端情况下可能被 CDN 错误地给了封面图。
+    /// 因此接受它们的前提是 URL 后缀也指向视频格式，双重验证防误报。
+    /// </summary>
+    private static readonly Dictionary<string, VideoFormat> WeakContentTypeMap = new(StringComparer.OrdinalIgnoreCase)
+    {
         ["video/mp4"] = VideoFormat.Mp4,
-        ["video/mp2t"] = VideoFormat.Ts,
         ["video/iso.segment"] = VideoFormat.M4s
     };
 
@@ -84,49 +117,95 @@ public static class VideoUrlMatcher
     {
         format = VideoFormat.Unknown;
 
-        // 第一优先级：响应头声明的媒体类型
-        if (!string.IsNullOrWhiteSpace(contentType))
+        // 先解析 URL 后缀信息，后面的判定会反复用到
+        string? urlExtension = null;
+        bool urlIsImage = false;
+        bool urlIsAudio = false;
+        bool urlIsVideoExtension = false;
+
+        if (!string.IsNullOrWhiteSpace(url)
+            && Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            // Content-Type 可能形如 "application/vnd.apple.mpegurl; charset=utf-8"，需剥离参数部分
-            var mediaType = contentType.Split(';')[0].Trim();
-            if (ContentTypeMap.TryGetValue(mediaType, out var formatFromContentType))
+            urlExtension = Path.GetExtension(uri.AbsolutePath);
+
+            if (urlExtension.Length > 0)
             {
-                format = formatFromContentType;
-                return true;
+                urlIsImage = ImageExtensions.Contains(urlExtension);
+                urlIsAudio = AudioExtensions.Contains(urlExtension);
+                urlIsVideoExtension = ExtensionMap.ContainsKey(urlExtension);
             }
         }
 
-        // 第二优先级：URL 后缀
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            return false;
-        }
+        string? mediaType = NormalizeMediaType(contentType);
 
-        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+        // ========== 分支 1：URL 明确指向视频格式 → 无条件以 URL 为准 ==========
+        // URL 后缀是文件自身的扩展名，是比 Content-Type 更可靠的证据。
+        // m3u8 的标准 Content-Type 本就是 audio/mpegurl（以 audio/ 开头），
+        // 各种 CDN 还会错标成 video/mp2t、text/plain 甚至 application/octet-stream ——
+        // 因此绝不能先按 Content-Type 过滤，否则清单会被误杀。清单是清单，分片是分片。
+        if (urlIsVideoExtension && urlExtension is not null)
         {
-            return false;
-        }
-
-        // 只处理 HTTP(S)：data:、blob:、file: 等协议无法直接交给下载器或 ffmpeg
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-        {
-            return false;
-        }
-
-        // 必须用 AbsolutePath 取后缀：直接用原始地址会把 "?token=1" 或 "#t=10" 当成后缀的一部分
-        var extension = Path.GetExtension(uri.AbsolutePath);
-        if (string.IsNullOrEmpty(extension))
-        {
-            return false;
-        }
-
-        if (ExtensionMap.TryGetValue(extension, out var formatFromUrl))
-        {
-            format = formatFromUrl;
+            format = ExtensionMap[urlExtension];
             return true;
         }
 
+        // ========== 分支 2：URL 明确是图片/音频 → 仅协议专属强信号可翻案 ==========
+        // 典型场景：CDN 把 TS 分片伪装成 .jpeg 后缀（如 video0.jpeg），
+        // 但 Content-Type 正确返回 video/mp2t —— 这是有效的分片，必须接受；
+        // 而弱信号（video/mp4）可能只是封面图被错标，不能翻案。
+        if (urlIsImage || urlIsAudio)
+        {
+            if (mediaType is not null && StrongContentTypeMap.TryGetValue(mediaType, out var fragmentFormat))
+            {
+                format = fragmentFormat;
+                return true;
+            }
+
+            return false;
+        }
+
+        // ========== 分支 3：URL 无定论 → 交给 Content-Type 判定 ==========
+        if (mediaType is not null)
+        {
+            // 强信号 MIME（mp2t/mpegurl/dash+xml）是流媒体协议专属，绝不会被误用到封面图
+            if (StrongContentTypeMap.TryGetValue(mediaType, out var strongFormat))
+            {
+                format = strongFormat;
+                return true;
+            }
+
+            // 弱信号（video/mp4/iso.segment）在 URL 无定论时可以直接采纳
+            if (WeakContentTypeMap.TryGetValue(mediaType, out var weakFormat))
+            {
+                format = weakFormat;
+                return true;
+            }
+
+            // image/audio/text/font 绝不可能是视频 —— 直接拒绝
+            if (mediaType.StartsWith("image/") || mediaType.StartsWith("audio/")
+                || mediaType.StartsWith("text/") || mediaType.StartsWith("font/"))
+            {
+                return false;
+            }
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// 把 Content-Type 规范化为不含参数的媒体类型。
+    /// </summary>
+    /// <param name="contentType">响应头中的 Content-Type，允许为 null。</param>
+    /// <returns>小写、去参数的媒体类型；输入为空时返回 null。</returns>
+    private static string? NormalizeMediaType(string? contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType))
+        {
+            return null;
+        }
+
+        return contentType.Split(';')[0].Trim().ToLowerInvariant();
     }
 
     /// <summary>

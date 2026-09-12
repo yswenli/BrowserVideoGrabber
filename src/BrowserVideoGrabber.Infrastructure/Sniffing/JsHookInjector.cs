@@ -53,4 +53,24 @@ public static class JsHookInjector
             .AddScriptToExecuteOnDocumentCreatedAsync(JsHookScript.Source)
             .ConfigureAwait(true);
     }
+
+    /// <summary>
+    /// 主动扫描当前页面的媒体资源。
+    /// </summary>
+    /// <param name="coreWebView">WebView2 核心对象。</param>
+    /// <returns>扫描完成（含 1.2 秒后的补扫）后兑现的任务。</returns>
+    /// <remarks>
+    /// 对<b>已经加载完</b>的页面，<see cref="InjectAsync"/> 注册的文档钩子不会再执行，
+    /// 因此这里直接把完整 Hook 源码再执行一遍（脚本内部以 <c>__bvgbHooked</c> 幂等，
+    /// 无副作用地让 XHR / fetch / 媒体元素拦截在当前文档立刻生效），
+    /// 随后运行 <see cref="JsHookScript.PageScanSource"/> 立即上报现有媒体元素地址。
+    /// 这保证了：此后直播流每次刷新清单的 XHR / fetch 都会被重新捕获。
+    /// </remarks>
+    public static async Task ScanPageAsync(CoreWebView2 coreWebView)
+    {
+        ArgumentNullException.ThrowIfNull(coreWebView);
+
+        await coreWebView.ExecuteScriptAsync(JsHookScript.Source).ConfigureAwait(true);
+        await coreWebView.ExecuteScriptAsync(JsHookScript.PageScanSource).ConfigureAwait(true);
+    }
 }

@@ -26,6 +26,7 @@ using System.Runtime.InteropServices;
 using BrowserVideoGrabber.App.Controls;
 using BrowserVideoGrabber.App.Formatting;
 using BrowserVideoGrabber.Core.Models;
+using BrowserVideoGrabber.Infrastructure.Sniffing;
 
 namespace BrowserVideoGrabber.App.Panes;
 
@@ -61,7 +62,9 @@ public sealed class SniffPane : UserControl
         _listView.AddColumns(
             ("格式", 80),
             ("分辨率", 90),
-            ("名称", 220),
+            ("名称", 200),
+            ("时长", 70),
+            ("大小", 90),
             ("来源", 70),
             ("发现时间", 110),
             ("地址", 420));
@@ -70,9 +73,13 @@ public sealed class SniffPane : UserControl
 
         _countLabel = new ToolStripLabel("共 0 条");
 
-        var clearButton = new ToolStripButton("清空列表")
+        var clearButton = new ToolStripButton
         {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
+            Text = "清空列表",
+            Image = CapsuleToolStripRenderer.CreateGlyphIcon("🗑"),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Margin = new Padding(4, 0, 4, 0),
+            Padding = new Padding(6, 2, 6, 2),
             ToolTipText = "清空已嗅探到的资源；清空后同一资源可以再次被捕获"
         };
         clearButton.Click += (_, _) =>
@@ -87,8 +94,10 @@ public sealed class SniffPane : UserControl
         var toolbar = new ToolStrip
         {
             GripStyle = ToolStripGripStyle.Hidden,
-            RenderMode = ToolStripRenderMode.System,
-            Dock = DockStyle.Top
+            RenderMode = ToolStripRenderMode.Professional,
+            Renderer = new CapsuleToolStripRenderer(),
+            Dock = DockStyle.Top,
+            Padding = new Padding(4, 2, 4, 2)
         };
         toolbar.Items.AddRange([new ToolStripLabel("页面视频"), new ToolStripSeparator(), clearButton]);
 
@@ -135,6 +144,8 @@ public sealed class SniffPane : UserControl
         var item = new ListViewItem(DisplayText.Format(video.Format)) { Tag = video };
         item.SubItems.Add(video.Resolution ?? "-");
         item.SubItems.Add(ToDisplayName(video));
+        item.SubItems.Add(DisplayText.Duration(video.DurationSeconds));
+        item.SubItems.Add(ToSizeText(video));
         item.SubItems.Add(ToSourceText(video.Source));
         item.SubItems.Add(video.DetectedAt.ToString("HH:mm:ss"));
         item.SubItems.Add(string.IsNullOrWhiteSpace(video.NormalizedUrl) ? video.Url : video.NormalizedUrl);
@@ -143,6 +154,8 @@ public sealed class SniffPane : UserControl
         _itemsById[video.Id] = item;
         _listView.Items.Add(item);
         _listView.EnsureVisible(_listView.Items.Count - 1);
+
+        SniffDiagnostics.Write($"pane row added; id={video.Id:N}; format={video.Format}; url={video.Url}; rows={_listView.Items.Count}");
 
         UpdateCount();
     }
@@ -219,11 +232,13 @@ public sealed class SniffPane : UserControl
         BufferedListView.SetSubItemText(item, 0, DisplayText.Format(video.Format));
         BufferedListView.SetSubItemText(item, 1, video.Resolution ?? "-");
         BufferedListView.SetSubItemText(item, 2, ToDisplayName(video));
-        BufferedListView.SetSubItemText(item, 3, ToSourceText(video.Source));
-        BufferedListView.SetSubItemText(item, 4, video.DetectedAt.ToString("HH:mm:ss"));
+        BufferedListView.SetSubItemText(item, 3, DisplayText.Duration(video.DurationSeconds));
+        BufferedListView.SetSubItemText(item, 4, ToSizeText(video));
+        BufferedListView.SetSubItemText(item, 5, ToSourceText(video.Source));
+        BufferedListView.SetSubItemText(item, 6, video.DetectedAt.ToString("HH:mm:ss"));
         BufferedListView.SetSubItemText(
             item,
-            5,
+            7,
             string.IsNullOrWhiteSpace(video.NormalizedUrl) ? video.Url : video.NormalizedUrl);
 
         item.Tag = video;
@@ -253,6 +268,26 @@ public sealed class SniffPane : UserControl
         "url" => "特征",
         _ => source
     };
+
+    /// <summary>
+    /// 生成体积展示文本。
+    /// </summary>
+    /// <param name="video">嗅探结果。</param>
+    /// <returns>可读体积文本；信息不足时为 <c>-</c>。</returns>
+    /// <remarks>
+    /// m3u8 的体积是「时长 × 声明码率」推算的，不是服务端精确值，故加 <c>≈</c> 前缀；
+    /// MP4 直接用 <c>Content-Length</c>，是精确值，不加前缀。
+    /// </remarks>
+    private static string ToSizeText(SniffedVideo video)
+    {
+        if (video.EstimatedBytes is not long bytes || bytes <= 0)
+        {
+            return "-";
+        }
+
+        var text = DisplayText.Size(bytes);
+        return video.IsSizeEstimated ? "≈ " + text : text;
+    }
 
     /// <summary>刷新计数标签。</summary>
     private void UpdateCount() => _countLabel.Text = $"共 {_itemsById.Count} 条";

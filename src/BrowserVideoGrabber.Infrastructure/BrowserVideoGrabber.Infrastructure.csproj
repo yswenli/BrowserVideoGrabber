@@ -1,19 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!--
-      基础设施层：承载 WebView2 嗅探器与 WinForms 控件的互操作，
-      因此目标框架固定为 net10.0-windows 并开启 Windows 桌面 UI 框架引用。
-    -->
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>BrowserVideoGrabber.Infrastructure</RootNamespace>
     <AssemblyName>BrowserVideoGrabber.Infrastructure</AssemblyName>
     <UseWindowsForms>true</UseWindowsForms>
-    <Description>BrowserVideoGrabber 具体实现：WebView2 嗅探、JS 注入、HTTP / ffmpeg 下载器、进程运行、任务持久化、Cookie 导出。</Description>
+    <Description>BrowserVideoGrabber 具体实现：WebView2 嗅探、HTTP / ffmpeg 下载器、进程运行、任务持久化。</Description>
+    <EnableAotAnalyzers>true</EnableAotAnalyzers>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- WebView2 运行时包：提供 CoreWebView2 网络监听、脚本注入与 CookieManager -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>
 

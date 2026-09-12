@@ -49,19 +49,25 @@ public sealed class RequestContext
     public string? UserAgent { get; set; }
 
     /// <summary>
-    /// 跨域请求来源标识。
+    /// 跨域请求来源标识，取值应为<b>来源页面</b>的 origin（<c>scheme://host[:port]</c>）。
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>该头默认不外发</b>，仅作为诊断信息保留。原因是一组可复现的实测结论：当请求携带
-    /// <c>Origin</c> 时，部分 CDN（playergo 系）会对<b>每一个</b>分片返回同一张
-    /// 56024 字节的占位 JPEG —— HTTP 状态码 200、<c>Content-Type: image/jpeg</c>，
-    /// 而内容是一段格式完全合法的 8.02 秒 TS（首字节为合法同步字 <c>0x47</c>）。
-    /// 去掉该头后，同一地址、同一时刻返回的是互不相同、体积正常的真实分片。
+    /// <b>该头必须取「页面」的 origin，绝不能取媒体地址自己的 origin。</b>
+    /// 早期结论「带 Origin 会导致 CDN 返回占位图」是<b>取值错误</b>造成的误判，已实测推翻：
+    /// playergo 系 CDN 会把 <c>Origin</c> 与站点域名白名单比对，
+    /// 传媒体地址自身的 <c>https://m3cdn.playergo.top</c> 或无关域名 <c>https://example.com</c>
+    /// 都判为不合法并回退诱饵；只有传来源站点的 origin 才返回真实内容。
     /// </para>
     /// <para>
-    /// 危害在于隐蔽：ffmpeg 能正常解码占位内容、<c>-c copy</c> 顺利完成、退出码为 0，
-    /// 工具于是判定「下载成功」，而用户拿到的是一个能打开却不是目标视频的 mp4。
+    /// 实测对照（同一条地址、同一时刻，仅 Origin 不同）：
+    /// 不传 → 122 字节诱饵清单；传 CDN 自身 origin → 122 字节诱饵清单；
+    /// 传页面 origin → 617 字节真实 master 清单，分片亦从 56024 字节占位图变为 1.1~1.4 MB 真实 TS。
+    /// </para>
+    /// <para>
+    /// 诱饵的危险在于隐蔽：HTTP 200、<c>Content-Type</c> 合法、首字节是合法 TS 同步字 <c>0x47</c>，
+    /// ffmpeg 能顺利 <c>-c copy</c> 并以退出码 0 结束，于是「下载成功」与「内容有效」完全脱钩。
+    /// 因此本头不是可选项，而是取到真实内容的前提；分片级校验用于兜底，不能替代本头。
     /// </para>
     /// </remarks>
     public string? Origin { get; set; }
@@ -107,9 +113,10 @@ public sealed class RequestContext
 
         AppendHeader("Referer", Referer);
 
-        // 刻意不追加 Origin：详见 Origin 属性的备注 —— 该头会让部分 CDN 对每个分片
-        // 返回同一张合法但无意义的占位图，且失败方式极其隐蔽（HTTP 200 + ffmpeg 退出码 0）。
-        // 分片请求属于同源子资源请求，缺少 Origin 不影响正常的 Referer 鉴权。
+        // Origin 必须为「页面」的 origin：部分 CDN 以该头做来源白名单校验，
+        // 缺失或取值不对时会对每个分片返回合法但内容错误的占位数据。详见 Origin 属性备注。
+        AppendHeader("Origin", Origin);
+
         AppendHeader("User-Agent", UserAgent);
         AppendHeader("Cookie", Cookie);
 

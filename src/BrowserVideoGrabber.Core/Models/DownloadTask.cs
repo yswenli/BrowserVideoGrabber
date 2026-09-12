@@ -80,6 +80,26 @@ public sealed class DownloadTask
     /// <summary>输出文件字节数，完成后回填。</summary>
     public long OutputBytes { get; set; }
 
+    /// <summary>
+    /// 下载过程中最近一次上报的已下载字节数。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="OutputBytes"/> 的区别：本字段是<b>下载中</b>的进度快照，随每次进度回调更新，
+    /// 供界面在进度对象尚未到达时（例如任务刚由等待转下载中）展示一个非零的「已下载」值；
+    /// <see cref="OutputBytes"/> 则是<b>终态</b>回填的成品大小。二者语义不同，不能混用，
+    /// 否则失败任务会在「大小」列显示出残缺的部分字节，让人误以为产物完整。
+    /// </remarks>
+    public long DownloadedBytes { get; set; }
+
+    /// <summary>
+    /// 是否为「部分成功」：成品文件含有空白时段（部分分片被 CDN 反爬占位污染或下载失败）。
+    /// </summary>
+    /// <remarks>仅由 <see cref="DownloadQueue"/> 在下载成功但存在缺失分片时回填。</remarks>
+    public bool IsPartial { get; set; }
+
+    /// <summary>部分成功的说明文字（缺失时段、可用分片占比等）；完整成功时为空。</summary>
+    public string? PartialDetail { get; set; }
+
     /// <summary>最近一次上报的下载进度（百分比 0~100），仅用于界面展示，不参与持久化决策。</summary>
     public double LastProgressPercent { get; set; }
 
@@ -103,6 +123,9 @@ public sealed class DownloadTask
             CreatedAt = CreatedAt,
             FinishedAt = FinishedAt,
             OutputBytes = OutputBytes,
+            DownloadedBytes = DownloadedBytes,
+            IsPartial = IsPartial,
+            PartialDetail = PartialDetail,
             LastProgressPercent = LastProgressPercent
         };
 }

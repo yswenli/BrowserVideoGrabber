@@ -75,37 +75,44 @@ public sealed class VideoFamilyIndexTests
     }
 
     /// <summary>
-    /// 同一个分片目录下的所有分片必须折叠成一行。
+    /// 同一个分片目录下的所有分片必须折叠成一个家族，但不直接上报到 UI。
     /// </summary>
+    /// <remarks>
+    /// 分片本身不可单独下载，创建家族只是为了给后续清单提供归并目标。
+    /// 因此 Consider 返回 Ignored，但家族表中仍有记录（FamilyCount = 1）。
+    /// </remarks>
     [Fact]
-    public void Should_FoldSegmentsOfSameDirectory_IntoOneRow()
+    public void Should_FoldSegmentsOfSameDirectory_IntoOneFamily_NotReported()
     {
         var index = new VideoFamilyIndex();
 
         var first = index.Consider(Create(Segment720FirstUrl, VideoFormat.Ts));
         var second = index.Consider(Create(Segment720SecondUrl, VideoFormat.Ts));
 
-        Assert.Equal(VideoAdmissionKind.New, first.Kind);
+        // 分片创建家族但不上报（Ignored），同目录后续分片也被抑制
+        Assert.Equal(VideoAdmissionKind.Ignored, first.Kind);
         Assert.Equal(VideoAdmissionKind.Ignored, second.Kind);
         Assert.Equal(first.FamilyKey, second.FamilyKey);
+
+        // 家族确实被创建了 —— 后续清单可以复用这个家族键
         Assert.Equal(1, index.FamilyCount);
     }
 
     /// <summary>
-    /// 「先看到分片、后看到清单」时，那一行要被原地升级成清单行，而不是留下两行。
+    /// 「先看到分片、后看到清单」时，清单应复用分片的家族键并以更高等级触发 Update。
     /// </summary>
     /// <remarks>
-    /// 触发场景很常见：页面已经开始播放之后才打开嗅探开关，于是只抓到了分片，
-    /// 稍后（直播刷新或重新加载）才抓到清单。这种情况下必须复用同一个家族标识，
-    /// 界面才会把这一行刷新掉，而不是又多出一行。
+    /// 分片虽然本身不上报到 UI，但它先创建了家族并占位；
+    /// 清单到达时 ResolveFamilyKey 复用这个家族键，以更高 rank 触发 Update，
+    /// 于是 UI 会原地刷新那一行（从分片 URL 变成清单 URL）。
     /// </remarks>
     [Fact]
-    public void Should_UpgradeSegmentRow_InPlace_WhenPlaylistArrivesLater()
+    public void Should_UpgradeSegmentFamily_ToPlaylist_WhenPlaylistArrivesLater()
     {
         var index = new VideoFamilyIndex();
 
         var segment = index.Consider(Create(Segment720FirstUrl, VideoFormat.Ts));
-        Assert.Equal(VideoAdmissionKind.New, segment.Kind);
+        Assert.Equal(VideoAdmissionKind.Ignored, segment.Kind);  // 分片不上报，但家族已创建
 
         var playlist = index.Consider(Create(Variant720Url, VideoFormat.M3u8));
 
@@ -305,6 +312,82 @@ public sealed class VideoFamilyIndexTests
 
         Assert.Equal(VideoAdmissionKind.Ignored, admission.Kind);
         Assert.Equal(0, index.FamilyCount);
+    }
+
+    /// <summary>
+    /// 同一条地址换了新的动态签名（查询串变化）后，必须原地刷新为最新那条，
+    /// 而不是沿用第一次的过期地址。
+    /// </summary>
+    /// <remarks>
+    /// 这是真实故障的根因：页面能正常播放，是因为播放器后来用新签名重新请求了清单；
+    /// 而旧实现只按「元数据更丰富」判断升级，新签名被判为 Ignored，
+    /// 界面上永远留着页面 HTML 里那条已过期的地址，下载必然失败。
+    /// </remarks>
+    [Fact]
+    public void Should_RefreshToLatestSignature_WhenSameUrlReRequested()
+    {
+        var index = new VideoFamilyIndex();
+
+        var stale = "https://cdn.test/hls/video/playlist.m3u8?verify=1788957992-OLD";
+        var fresh = "https://cdn.test/hls/video/playlist.m3u8?verify=1789237987-NEW";
+
+        var first = index.Consider(Create(stale, VideoFormat.M3u8, contentType: "application/vnd.apple.mpegurl"));
+        Assert.Equal(VideoAdmissionKind.New, first.Kind);
+
+        var second = index.Consider(Create(fresh, VideoFormat.M3u8, contentType: "application/vnd.apple.mpegurl"));
+
+        Assert.Equal(VideoAdmissionKind.Update, second.Kind);
+        Assert.Equal(fresh, second.Video.Url);
+
+        // 必须保持同一个标识，界面才能原地刷新而不是新增一行
+        Assert.Equal(first.Video.Id, second.Video.Id);
+        Assert.Equal(1, index.FamilyCount);
+    }
+
+    /// <summary>
+    /// 重新签名刷新时，不能把先前已获得的元数据（分辨率 / 码率 / Content-Type）弄丢。
+    /// </summary>
+    /// <remarks>
+    /// 新签名常来自 JS Hook 链路，其元数据可能比网络响应链路少；
+    /// 整体替换会让列表里已显示的信息倒退。
+    /// </remarks>
+    [Fact]
+    public void Should_PreserveRicherMetadata_WhenRefreshingToNewSignature()
+    {
+        var index = new VideoFamilyIndex();
+
+        var rich = "https://cdn.test/hls/video/playlist.m3u8?verify=1-OLD";
+        var bare = "https://cdn.test/hls/video/playlist.m3u8?verify=2-NEW";
+
+        index.Consider(Create(rich, VideoFormat.M3u8, "1280x720", 2_500_000, "application/vnd.apple.mpegurl"));
+        var refreshed = index.Consider(Create(bare, VideoFormat.M3u8, source: "jshook"));
+
+        Assert.Equal(bare, refreshed.Video.Url);
+        Assert.Equal("1280x720", refreshed.Video.Resolution);
+        Assert.Equal(2_500_000, refreshed.Video.Bandwidth);
+        Assert.Equal("application/vnd.apple.mpegurl", refreshed.Video.ContentType);
+    }
+
+    /// <summary>
+    /// 家族索引改写标识时不得丢掉页面标题（下载文件名依赖它）。
+    /// </summary>
+    [Fact]
+    public void Should_KeepPageTitle_WhenAssigningFamilyId()
+    {
+        var index = new VideoFamilyIndex();
+        var url = "https://cdn.test/hls/video/playlist.m3u8";
+
+        var admission = index.Consider(
+            new SniffedVideo
+            {
+                Url = url,
+                NormalizedUrl = VideoUrlMatcher.Normalize(url),
+                Format = VideoFormat.M3u8,
+                PageTitle = "某视频站点 - 精彩片段"
+            });
+
+        Assert.Equal("某视频站点 - 精彩片段", admission.Video.PageTitle);
+        Assert.NotEqual(Guid.Empty, admission.Video.Id);
     }
 
     /// <summary>

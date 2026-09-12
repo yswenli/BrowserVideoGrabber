@@ -1,7 +1,6 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- 界面层：WinForms 可执行程序，仅负责界面渲染与事件绑定 -->
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>BrowserVideoGrabber.App</RootNamespace>
@@ -11,10 +10,18 @@
     <Description>BrowserVideoGrabber 主程序：内置浏览器 + 页面视频嗅探 + 多格式视频下载。</Description>
     <StartupObject>BrowserVideoGrabber.App.Program</StartupObject>
     <ApplicationIcon>favicon.ico</ApplicationIcon>
+    <!-- Native AOT：条件启用 -->
+    <PublishAot Condition="'$(PublishAot)' == 'true'">true</PublishAot>
+    <InvariantGlobalization Condition="'$(PublishAot)' == 'true'">true</InvariantGlobalization>
+    <EnableAotAnalyzers>true</EnableAotAnalyzers>
+    <!-- IL3050/IL2026 是分析器保守提醒：我们的 JsonSerializerOptions 已绑定 Source Generator TypeInfoResolver，运行时零反射 -->
+    <NoWarn Condition="'$(PublishAot)' == 'true'">IL3050;IL2026</NoWarn>
+    <!-- WinForms + AOT 绕过默认剪裁硬错误，rd.xml 做根保留 -->
+    <_SuppressWinFormsTrimError Condition="'$(PublishAot)' == 'true'">true</_SuppressWinFormsTrimError>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="favicon.ico" />
+    <Content Include="favicon.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +31,10 @@
   <ItemGroup>
     <ProjectReference Include="..\BrowserVideoGrabber.Core\BrowserVideoGrabber.Core.csproj" />
     <ProjectReference Include="..\BrowserVideoGrabber.Infrastructure\BrowserVideoGrabber.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootDescriptor Include="rd.xml" />
   </ItemGroup>
 
 </Project>

@@ -61,6 +61,9 @@ public static class JsHookScript
 
           var EXTENSION_PATTERN = /\.(m3u8|m3u|ts|m4s|mp4|mpd)(\?|#|$)/i;
           var PLAYLIST_HINT_PATTERN = /m3u8|mpegurl|dash\+xml/i;
+          // 显式排除图片/音频后缀：某些 CDN 会把封面图以 video/* 的 Content-Type 返回，
+          // 这里在 JS 层先挡一层，避免给后端增加无意义的过滤开销
+          var BLACKLIST_PATTERN = /\.(jpg|jpeg|png|gif|webp|bmp|heic|avif|svg|mp3|wav|flac|aac|ogg|m4a|opus|css|js|html?|woff2?|ttf|eot)(\?|#|$)/i;
 
           function report(value, source) {
             try {
@@ -68,6 +71,10 @@ public static class JsHookScript
 
               var url = String(value);
               if (url.indexOf('http') !== 0) { return; }
+
+              // 黑名单优先：明确不是视频的 URL 一律跳过，即便 Content-Type 可能误报
+              if (BLACKLIST_PATTERN.test(url)) { return; }
+
               if (!EXTENSION_PATTERN.test(url) && !PLAYLIST_HINT_PATTERN.test(url)) { return; }
 
               if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
@@ -135,6 +142,63 @@ public static class JsHookScript
 
           patchMediaElement(window.HTMLMediaElement && window.HTMLMediaElement.prototype);
           patchMediaElement(window.HTMLSourceElement && window.HTMLSourceElement.prototype);
+        })();
+        """;
+
+    /// <summary>
+    /// 主动扫描<b>当前文档</b>媒体元素地址的脚本源码（右键「下载视频」触发）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Source"/> 是「文档创建时」注入的钩子，对已经加载完的页面不再生效；
+    /// 本脚本用于兜底：立即扫描 <c>&lt;video&gt; / &lt;audio&gt;</c> 及其
+    /// <c>&lt;source&gt;</c> 子元素当前的地址并上报，且 1.2 秒后再扫一遍，
+    /// 以覆盖「播放器在页面就绪后才动态绑定地址」的站点。
+    /// </para>
+    /// <para>
+    /// 脚本返回一个 Promise：<c>ExecuteScriptAsync</c> 会等待它兑现，
+    /// 保证两次扫描都完成后宿主侧才收到「扫描结束」的信号。
+    /// </para>
+    /// </remarks>
+    public const string PageScanSource = """
+        (function () {
+          function post(url) {
+            try {
+              if (!url) { return; }
+              url = String(url);
+              if (url.indexOf('http') !== 0) { return; }
+              if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage({
+                  type: 'bvgb-sniff',
+                  url: url,
+                  source: 'scan'
+                });
+              }
+            } catch (e) { }
+          }
+
+          function pass() {
+            try {
+              var media = document.querySelectorAll('video, audio');
+              for (var i = 0; i < media.length; i++) {
+                var el = media[i];
+                post(el.currentSrc || el.src);
+                post(el.getAttribute && el.getAttribute('src'));
+                var sources = el.querySelectorAll('source');
+                for (var j = 0; j < sources.length; j++) {
+                  post(sources[j].src);
+                }
+              }
+            } catch (e) { }
+          }
+
+          return new Promise(function (resolve) {
+            pass();
+            setTimeout(function () {
+              pass();
+              resolve(true);
+            }, 1200);
+          });
         })();
         """;
 }

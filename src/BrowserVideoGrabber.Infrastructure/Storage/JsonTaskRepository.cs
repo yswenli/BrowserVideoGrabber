@@ -22,11 +22,8 @@
 *
 *****************************************************************************/
 
-using System.Text.Encodings.Web;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using BrowserVideoGrabber.Core.Abstractions;
-using BrowserVideoGrabber.Core.Models;
+using System.Text.Json;using BrowserVideoGrabber.Core.Abstractions;
+using BrowserVideoGrabber.Core.Json;using BrowserVideoGrabber.Core.Models;
 
 namespace BrowserVideoGrabber.Infrastructure.Storage;
 
@@ -51,12 +48,7 @@ public sealed class JsonTaskRepository : ITaskRepository
     /// 采用非严格转义编码器，使中文标题与 URL 在文件中保持可读，
     /// 便于用户直接打开文件排查问题。
     /// </remarks>
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private static readonly JsonSerializerOptions SerializerOptions = JsonModelsContext.CreateOptions();
 
     private readonly IFileSystem _fileSystem;
     private readonly string _filePath;
@@ -146,3 +138,4 @@ public sealed class JsonTaskRepository : ITaskRepository
         _fileSystem.MoveFile(temporaryPath, _filePath, overwrite: true);
     }
 }
+

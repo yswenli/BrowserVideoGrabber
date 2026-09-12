@@ -48,7 +48,8 @@ internal static class DisplayText
         VideoFormat.Ts => "TS 分片",
         VideoFormat.M4s => "M4S 分片",
         VideoFormat.Mp4 => "MP4",
-        VideoFormat.Mpd => "DASH 索引",
+        VideoFormat.Mpd => "DASH",
+        VideoFormat.Ismc => "SmoothStream",
         _ => "未知"
     };
 
@@ -117,4 +118,29 @@ internal static class DisplayText
     /// <returns>形如 <c>09-13 01:20</c> 的文本。</returns>
     public static string Time(DateTimeOffset? time)
         => time.HasValue ? time.Value.ToString("MM-dd HH:mm") : "-";
+
+    /// <summary>
+    /// 把视频时长（秒）格式化为可读文本。
+    /// </summary>
+    /// <param name="seconds">时长（秒）；为 null 或非正数返回 <c>-</c>。</param>
+    /// <returns>
+    /// 不足 1 小时返回 <c>mm:ss</c>（如 <c>120:00</c>），
+    /// 满 1 小时返回 <c>h:mm:ss</c>（如 <c>2:00:00</c>）。
+    /// </returns>
+    /// <remarks>
+    /// 嗅探列表的时长可能未知（主清单未探测到变体），用 <c>-</c> 而非 <c>0</c> 表示，
+    /// 避免把「未知」误读成「时长为零」。
+    /// </remarks>
+    public static string Duration(double? seconds)
+    {
+        if (seconds is not > 0)
+        {
+            return "-";
+        }
+
+        var total = TimeSpan.FromSeconds(seconds.Value);
+        return total.TotalHours >= 1
+            ? $"{(int)total.TotalHours}:{total.Minutes:00}:{total.Seconds:00}"
+            : $"{(int)total.TotalMinutes:00}:{total.Seconds:00}";
+    }
 }

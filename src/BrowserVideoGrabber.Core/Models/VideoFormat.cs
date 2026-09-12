@@ -51,5 +51,8 @@ public enum VideoFormat
     Mp4 = 4,
 
     /// <summary>DASH 清单（.mpd）。交给 ffmpeg 自行解析并拉取分片。</summary>
-    Mpd = 5
+    Mpd = 5,
+
+    /// <summary>Microsoft Smooth Streaming 清单（.ism / .ismc）。交给 ffmpeg 自行拉取。</summary>
+    Ismc = 6
 }

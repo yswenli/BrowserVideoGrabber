@@ -99,6 +99,27 @@ public sealed class PhysicalFileSystem : IFileSystem
     }
 
     /// <inheritdoc />
+    public bool DeleteDirectory(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !DirectoryExists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // 目录被占用（例如 ffmpeg 尚未完全退出）或权限不足：
+            // 清理失败不能让下载结果失效，交由上层决定是否提示用户
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
     public Stream OpenWrite(string path, bool append)
     {
         var directory = Path.GetDirectoryName(path);

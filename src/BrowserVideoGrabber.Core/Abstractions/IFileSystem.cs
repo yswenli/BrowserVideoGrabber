@@ -57,6 +57,25 @@ public interface IFileSystem
     /// <param name="path">文件路径。</param>
     void DeleteFile(string path);
 
+    /// <summary>
+    /// 删除目录及其中的全部内容。目录不存在时不抛异常。
+    /// </summary>
+    /// <param name="path">目录路径。</param>
+    /// <returns>删除成功返回 true；目录不存在或删除失败（被占用、权限不足）返回 false。</returns>
+    /// <remarks>
+    /// <para>
+    /// 提供「递归删除整个目录」而不是让调用方枚举后逐个删，是因为调用方
+    /// <b>并不知道目录里到底有哪些文件</b>：HLS 下载会往工作目录里写分片、解密后的分片、
+    /// AES 密钥与拼接产物，其中失败分片留下的半成品只有文件系统自己数得清。
+    /// 让调用方逐个删，漏掉的那部分就成了永久垃圾。
+    /// </para>
+    /// <para>
+    /// 返回布尔值而非静默吞掉失败：清理失败虽不应掩盖下载结果，但调用方需要知道
+    /// 「目录没删掉」，以便把残留路径写进任务说明，用户才有可能手动处理。
+    /// </para>
+    /// </remarks>
+    bool DeleteDirectory(string path);
+
     /// <summary>以写入方式打开文件。</summary>
     /// <param name="path">文件路径。</param>
     /// <param name="append">true 表示追加写（用于断点续传），false 表示覆盖写。</param>

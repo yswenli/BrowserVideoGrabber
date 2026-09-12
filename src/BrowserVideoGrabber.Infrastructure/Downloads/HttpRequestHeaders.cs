@@ -58,8 +58,13 @@ public static class HttpRequestHeaders
             request.Headers.TryAddWithoutValidation("User-Agent", context.UserAgent);
         }
 
-        // 刻意不注入 Origin：该头会让部分 CDN 对每个分片返回同一张占位 JPEG（HTTP 200），
-        // 使「下载成功」与「内容有效」脱钩。详见 RequestContext.Origin 的备注。
+        // Origin 取「页面」的 origin 而非媒体地址自身：CDN 以该头做来源白名单校验，
+        // 缺失或取错值会对每个分片返回合法但内容错误的占位数据。详见 RequestContext.Origin 备注。
+        if (!string.IsNullOrWhiteSpace(context.Origin))
+        {
+            request.Headers.TryAddWithoutValidation("Origin", context.Origin);
+        }
+
         if (!string.IsNullOrWhiteSpace(context.Cookie))
         {
             request.Headers.TryAddWithoutValidation("Cookie", context.Cookie);

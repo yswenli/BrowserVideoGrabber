@@ -244,6 +244,7 @@ public sealed class DownloadQueue : IDisposable
     public void Pause(Guid taskId)
     {
         DownloadTask? task;
+        DownloadStatus previousStatus;
         CancellationTokenSource? cancellation = null;
 
         lock (_gate)
@@ -254,11 +255,12 @@ public sealed class DownloadQueue : IDisposable
                 return;
             }
 
+            previousStatus = task.Status;
             task.Status = DownloadStatus.Paused;
             _cancellations.TryGetValue(taskId, out cancellation);
         }
 
-        NotifyStateChanged(task, DownloadStatus.Paused);
+        NotifyStateChanged(task, previousStatus);
 
         // 取消动作必须放在锁外：取消回调可能反向申请锁，锁内取消存在死锁风险
         CancelSafely(cancellation);
@@ -285,7 +287,8 @@ public sealed class DownloadQueue : IDisposable
             _retryNotBefore.Remove(taskId);
         }
 
-        NotifyStateChanged(task, DownloadStatus.Pending);
+        // 从 Paused → Pending，previousStatus 是 Paused
+        NotifyStateChanged(task, DownloadStatus.Paused);
 
         // 调度泵可能已因「全部落定」而退出，恢复后需要重新拉起
         Start();
@@ -299,6 +302,7 @@ public sealed class DownloadQueue : IDisposable
     public void Cancel(Guid taskId)
     {
         DownloadTask? task;
+        DownloadStatus previousStatus;
         CancellationTokenSource? cancellation = null;
 
         lock (_gate)
@@ -309,13 +313,14 @@ public sealed class DownloadQueue : IDisposable
                 return;
             }
 
+            previousStatus = task.Status;
             task.Status = DownloadStatus.Canceled;
             task.FinishedAt = DateTimeOffset.Now;
             _cancellations.TryGetValue(taskId, out cancellation);
             _retryNotBefore.Remove(taskId);
         }
 
-        NotifyStateChanged(task, DownloadStatus.Canceled);
+        NotifyStateChanged(task, previousStatus);
         CancelSafely(cancellation);
     }
 
@@ -589,10 +594,13 @@ public sealed class DownloadQueue : IDisposable
                 {
                     task.Status = DownloadStatus.Completed;
                     task.OutputBytes = result.OutputBytes;
+                    task.IsPartial = result.IsPartial;
+                    task.PartialDetail = result.PartialDetail;
                     task.LastError = null;
                     task.FinishedAt = DateTimeOffset.Now;
                 }
 
+                // 从 Running → Completed
                 NotifyStateChanged(task, DownloadStatus.Running);
                 return;
             }
@@ -611,7 +619,9 @@ public sealed class DownloadQueue : IDisposable
                 }
             }
 
-            NotifyStateChanged(task, task.Status);
+            // 取消前的状态必然是 Running（本方法开始时就会被 PumpAsync 设为 Running），
+            // 暂停/取消操作虽可能先改状态，但事件语义上都以 "从运行中中断" 表达
+            NotifyStateChanged(task, DownloadStatus.Running);
         }
         catch (Exception exception)
         {
@@ -641,8 +651,6 @@ public sealed class DownloadQueue : IDisposable
     /// <param name="isRetryable">该错误是否值得重试。</param>
     private void MarkFailed(DownloadTask task, string error, bool isRetryable)
     {
-        var willRetry = false;
-
         lock (_gate)
         {
             task.LastError = error;
@@ -657,7 +665,6 @@ public sealed class DownloadQueue : IDisposable
 
                 // 指数退避：拉长重试间隔以避开瞬时限流与 CDN 抖动
                 _retryNotBefore[task.Id] = DateTimeOffset.Now + _options.RetryPolicy.GetDelay(task.RetryCount);
-                willRetry = true;
             }
             else
             {
@@ -667,7 +674,7 @@ public sealed class DownloadQueue : IDisposable
             }
         }
 
-        NotifyStateChanged(task, willRetry ? DownloadStatus.Running : DownloadStatus.Failed);
+        NotifyStateChanged(task, DownloadStatus.Running);
     }
 
     /// <summary>
@@ -677,9 +684,11 @@ public sealed class DownloadQueue : IDisposable
     /// <param name="progress">进度快照。</param>
     private void OnProgressReported(DownloadTask task, DownloadProgress progress)
     {
-        if (task.OutputBytes == 0 && progress.DownloadedBytes > 0)
+        // 已下载字节是「下载中」的进度快照，写入 DownloadedBytes 而非 OutputBytes：
+        // 后者是终态回填的成品大小，若在此处被覆盖，失败任务的「大小」列会显示残缺的部分字节
+        if (progress.DownloadedBytes > 0)
         {
-            task.OutputBytes = progress.DownloadedBytes;
+            task.DownloadedBytes = progress.DownloadedBytes;
         }
 
         // 进度百分比允许在重试时回退（新一轮从 0 开始），因此这里不做单调性裁剪，

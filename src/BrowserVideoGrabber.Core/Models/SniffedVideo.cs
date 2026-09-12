@@ -65,8 +65,73 @@ public sealed class SniffedVideo
     /// <summary>嗅探来源标记，便于排查漏抓问题。取值：network（响应监听）/ url（特征匹配）/ jshook（脚本劫持）。</summary>
     public string Source { get; init; } = "url";
 
+    /// <summary>
+    /// 当前页面标题（来自所属 WebView2 的 <c>DocumentTitle</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 多标签页下每个嗅探器绑定自己的 <c>WebView2</c>，因此该值自然对应各自所在页面。
+    /// 下载文件默认以它为文件名（截断 15 字符）；为空时回退到 <see cref="DisplayTitle"/>。
+    /// </remarks>
+    public string? PageTitle { get; init; }
+
+    /// <summary>
+    /// 视频总时长（秒）。
+    /// </summary>
+    /// <remarks>
+    /// 只有读到播放列表正文才能算出：媒体清单直接累加 <c>#EXTINF</c>；
+    /// 主清单本身不含分片，需再取一次最高码率变体的清单才能得到。
+    /// 因此该值可能为空，界面应显示「-」而不是 0 —— 0 会被误读成「时长为零」。
+    /// </remarks>
+    public double? DurationSeconds { get; init; }
+
+    /// <summary>
+    /// 资源字节数，来自响应头的 <c>Content-Length</c>。
+    /// </summary>
+    /// <remarks>
+    /// 只对单文件资源（如 MP4）有意义。m3u8 的该值是<b>清单文本本身</b>的大小（通常几百字节），
+    /// 与视频体积毫无关系，绝不能当作视频大小展示。
+    /// </remarks>
+    public long? ContentLength { get; init; }
+
     /// <summary>发现时间。</summary>
     public DateTimeOffset DetectedAt { get; init; } = DateTimeOffset.Now;
+
+    /// <summary>
+    /// 估算的视频体积（字节）；信息不足时为 null。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// m3u8 无法直接得知成品大小：清单里既没有总字节数，分片数量与每片大小也只有逐片请求才知道。
+    /// 这里用「时长 × 声明码率 ÷ 8」推算，误差主要取决于码率声明是否接近实际值。
+    /// </para>
+    /// <para>
+    /// 单文件资源（MP4）直接用 <c>Content-Length</c>，那是精确值而非估算。
+    /// </para>
+    /// </remarks>
+    public long? EstimatedBytes
+    {
+        get
+        {
+            if (Format == VideoFormat.Mp4 && ContentLength is > 0)
+            {
+                return ContentLength;
+            }
+
+            if (DurationSeconds is > 0 && Bandwidth is > 0)
+            {
+                return (long)Math.Ceiling(DurationSeconds.Value * Bandwidth.Value / 8d);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EstimatedBytes"/> 是否为估算值（而非服务端声明的精确长度）。
+    /// </summary>
+    /// <remarks>界面据此决定是否加上「≈」前缀，避免把推算值呈现得像实测值一样可信。</remarks>
+    public bool IsSizeEstimated
+        => EstimatedBytes.HasValue && !(Format == VideoFormat.Mp4 && ContentLength is > 0);
 
     /// <summary>
     /// 展示用短标题：取归一化地址的最后一段路径，路径为空时回退为完整地址。
@@ -120,6 +185,9 @@ public sealed class SniffedVideo
         Resolution = Resolution,
         Bandwidth = Bandwidth,
         Source = Source,
+        PageTitle = PageTitle,
+        DurationSeconds = DurationSeconds,
+        ContentLength = ContentLength,
         DetectedAt = DetectedAt
     };
 

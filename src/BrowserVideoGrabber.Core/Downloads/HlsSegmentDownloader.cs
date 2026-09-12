@@ -114,29 +114,47 @@ public sealed class HlsSegmentDownloader
         }
 
         var semaphore = new SemaphoreSlim(_maxConcurrency);
-        var tasks = new List<Task<SegmentFetchOutcome>>(plan.SegmentCount);
-        for (var i = 0; i < plan.SegmentCount; i++)
+
+        IReadOnlyList<SegmentFetchOutcome> outcomes;
+        if (_maxConcurrency == 1)
         {
-            var index = i;
-            tasks.Add(Task.Run(async () =>
+            // 串行模式必须严格按下标顺序处理：Task.Run 不保证启动顺序，
+            // 若占位分片乱序抢跑，「首个占位被取回、其余判重复」的语义会被破坏
+            var serial = new SegmentFetchOutcome[plan.SegmentCount];
+            for (var i = 0; i < plan.SegmentCount; i++)
             {
-                await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
+                serial[i] = await ProcessSegmentAsync(plan, context, workDirectory, key, i, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            outcomes = serial;
+        }
+        else
+        {
+            var tasks = new List<Task<SegmentFetchOutcome>>(plan.SegmentCount);
+            for (var i = 0; i < plan.SegmentCount; i++)
+            {
+                var index = i;
+                tasks.Add(Task.Run(async () =>
                 {
-                    return await ProcessSegmentAsync(plan, context, workDirectory, key, index, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
-            }, cancellationToken));
+                    await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        return await ProcessSegmentAsync(plan, context, workDirectory, key, index, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                }, cancellationToken));
+            }
+
+            outcomes = await Task.WhenAll(tasks).ConfigureAwait(false);
         }
 
-        var outcomes = await Task.WhenAll(tasks).ConfigureAwait(false);
-
         var missingIntervals = BuildMissingIntervals(plan, outcomes);
-        var worthKeeping = _validator.IsWorthKeeping(outcomes.Length, outcomes.Count(o => o.Status == SegmentStatus.Fetched));
+        var worthKeeping = _validator.IsWorthKeeping(outcomes.Count, outcomes.Count(o => o.Status == SegmentStatus.Fetched));
 
         return new HlsSegmentDownloadResult(outcomes, missingIntervals, worthKeeping);
     }

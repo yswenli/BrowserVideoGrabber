@@ -88,7 +88,7 @@ public sealed class FfmpegDownloadHandler : IDownloadHandler
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        return task.Format is VideoFormat.M3u8 or VideoFormat.Ts or VideoFormat.M4s or VideoFormat.Mpd;
+        return task.Format is VideoFormat.M3u8 or VideoFormat.Ts or VideoFormat.M4s or VideoFormat.Mpd or VideoFormat.Ismc;
     }
 
     /// <inheritdoc />

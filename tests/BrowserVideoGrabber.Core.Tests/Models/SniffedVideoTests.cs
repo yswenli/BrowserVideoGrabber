@@ -120,6 +120,83 @@ public sealed class SniffedVideoTests
     }
 
     /// <summary>
+    /// 替换标识时也必须保留时长与体积字段，否则「换签名刷新」会把时长列刷成「-」。
+    /// </summary>
+    /// <remarks>
+    /// 这是曾经踩过的坑：<c>WithId</c> 一度漏拷 <c>PageTitle</c>，导致页面标题在进入家族索引时被丢弃。
+    /// 时长与体积同样经 <c>WithId</c> 流转，必须一并保留。
+    /// </remarks>
+    [Fact]
+    public void Should_PreserveDurationAndSize_WhenReplacingId()
+    {
+        var original = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/index.m3u8",
+            Format = VideoFormat.M3u8,
+            Bandwidth = 2_800_000,
+            DurationSeconds = 7200d,
+            PageTitle = "示例视频"
+        };
+
+        var replaced = original.WithId(VideoFamilyIndex.CreateStableId("url:x"));
+
+        Assert.Equal(7200d, replaced.DurationSeconds);
+        Assert.Equal(original.EstimatedBytes, replaced.EstimatedBytes);
+        Assert.Equal(original.PageTitle, replaced.PageTitle);
+    }
+
+    /// <summary>
+    /// MP4 的体积直接用 Content-Length，是精确值而非估算值。
+    /// </summary>
+    [Fact]
+    public void Should_UseContentLength_ForMp4_AndMarkAsExact()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/video.mp4",
+            Format = VideoFormat.Mp4,
+            ContentLength = 104857600
+        };
+
+        Assert.Equal(104857600, video.EstimatedBytes);
+        Assert.False(video.IsSizeEstimated);
+    }
+
+    /// <summary>
+    /// m3u8 的体积由「时长 × 码率 ÷ 8」推算，应标记为估算值。
+    /// </summary>
+    [Fact]
+    public void Should_EstimateM3u8Size_FromDurationAndBandwidth()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/index.m3u8",
+            Format = VideoFormat.M3u8,
+            Bandwidth = 2_800_000,
+            DurationSeconds = 7200d
+        };
+
+        // 7200s × 2.8Mbit/s ÷ 8 = 2_520_000_000 字节
+        Assert.Equal(2_520_000_000, video.EstimatedBytes);
+        Assert.True(video.IsSizeEstimated);
+    }
+
+    /// <summary>
+    /// 信息不足（无时长或码率）时体积应为 null，界面据此显示「-」。
+    /// </summary>
+    [Fact]
+    public void Should_ReturnNullSize_WhenDurationOrBandwidthMissing()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/index.m3u8",
+            Format = VideoFormat.M3u8
+        };
+
+        Assert.Null(video.EstimatedBytes);
+    }
+
+    /// <summary>
     /// 构造一个嗅探结果。
     /// </summary>
     /// <param name="url">资源地址。</param>

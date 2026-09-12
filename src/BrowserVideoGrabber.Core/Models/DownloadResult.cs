@@ -47,6 +47,18 @@ public sealed record DownloadResult
     public long OutputBytes { get; init; }
 
     /// <summary>
+    /// 本次尝试是否为「部分成功」：分片有缺失，成品文件含有空白时段。
+    /// </summary>
+    /// <remarks>
+    /// 部分成功仍属于成功（<see cref="Success"/> 为 true、任务进入已完成终态），
+    /// 但与完整成功不同，界面应据此外显「缺失时段」提示，而非把它伪装成完好的视频。
+    /// </remarks>
+    public bool IsPartial { get; init; }
+
+    /// <summary>部分成功的说明文字（缺失时段、可用分片占比等）；完整成功时为空。</summary>
+    public string? PartialDetail { get; init; }
+
+    /// <summary>
     /// 该失败是否值得重试。
     /// 网络中断、5xx、超时等属于可重试；DRM 保护、404、参数错误属于不可重试。
     /// </summary>
@@ -67,6 +79,28 @@ public sealed record DownloadResult
             Success = true,
             OutputPath = outputPath,
             OutputBytes = outputBytes
+        };
+
+    /// <summary>
+    /// 构造「部分成功」结果。
+    /// </summary>
+    /// <param name="outputPath">输出文件完整路径。</param>
+    /// <param name="outputBytes">输出文件字节数。</param>
+    /// <param name="partialDetail">部分成功的说明文字（缺失时段等）。</param>
+    /// <returns>部分成功结果实例。<see cref="Success"/> 为 true、<see cref="IsPartial"/> 为 true。</returns>
+    /// <remarks>
+    /// 与 <see cref="Ok"/> 的唯一区别是 <see cref="IsPartial"/> 标记为 true 并附带说明。
+    /// 部分成功仍计入成功：任务落到「已完成」终态，但界面会据
+    /// <paramref name="partialDetail"/> 如实标注缺失时段，而不是把残缺文件伪装成完整视频。
+    /// </remarks>
+    public static DownloadResult OkPartial(string outputPath, long outputBytes, string? partialDetail)
+        => new()
+        {
+            Success = true,
+            OutputPath = outputPath,
+            OutputBytes = outputBytes,
+            IsPartial = true,
+            PartialDetail = partialDetail
         };
 
     /// <summary>

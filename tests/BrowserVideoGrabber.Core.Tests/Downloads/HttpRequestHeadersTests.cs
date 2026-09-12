@@ -11,7 +11,7 @@
 *创建人： yswenli
 *电子邮箱：yswenli@outlook.com
 *创建时间：2026/9/13 03:22:00
-*描述：HTTP 请求头写入工具的单元测试，验证不再注入 Origin 且鉴权头完整。
+*描述：HTTP 请求头写入工具的单元测试，验证 Origin 随页面来源一并注入且鉴权头完整。
 *
 *=================================================
 *修改标记
@@ -31,16 +31,21 @@ namespace BrowserVideoGrabber.Tests.Downloads;
 /// <see cref="HttpRequestHeaders"/> 的行为验证。
 /// </summary>
 /// <remarks>
-/// 与 <c>RequestContextTests</c> 同源：ffmpeg 链路与 HttpClient 链路必须同样「不发 Origin」，
-/// 只修一条链路会让另一条继续产出占位内容，而故障现象完全相同，极难定位。
+/// <para>
+/// 与 <c>RequestContextTests</c> 同源：ffmpeg 链路与 HttpClient 链路必须<b>同样发出 Origin</b>，
+/// 只修一条链路会让另一条继续产出占位内容，而两条链路的故障现象完全相同，极难定位。
+/// </para>
+/// <para>
+/// 该头必须取来源页面的 origin，取媒体地址自身的 origin 会被 CDN 判为来源不合法并回退诱饵。
+/// </para>
 /// </remarks>
 public sealed class HttpRequestHeadersTests
 {
     /// <summary>
-    /// 上下文带 Origin 时，请求也不得携带该头。
+    /// 上下文带 Origin 时，请求必须携带该头 —— 缺失会让 CDN 回退占位诱饵。
     /// </summary>
     [Fact]
-    public void Apply_ShouldNotSendOrigin_EvenWhenContextCarriesIt()
+    public void Apply_ShouldSendOrigin_WhenContextCarriesIt()
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://cdn.example.com/seg0.jpeg");
         var context = new RequestContext
@@ -53,7 +58,7 @@ public sealed class HttpRequestHeadersTests
 
         HttpRequestHeaders.Apply(request, context);
 
-        Assert.False(request.Headers.Contains("Origin"));
+        Assert.Equal("https://www.example.com", request.Headers.NonValidated["Origin"].ToString());
         Assert.Equal("https://www.example.com/watch/1", request.Headers.Referrer?.ToString());
 
         // 必须用 NonValidated 视图读原始值：直接对 User-Agent 调 TryGetValues，

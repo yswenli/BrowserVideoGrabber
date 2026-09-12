@@ -23,10 +23,12 @@
 *****************************************************************************/
 
 using System.Net;
+using System.Text.Json;
 using BrowserVideoGrabber.Core.Abstractions;
 using BrowserVideoGrabber.Core.Configuration;
 using BrowserVideoGrabber.Core.Downloads;
 using BrowserVideoGrabber.Core.Ffmpeg;
+using BrowserVideoGrabber.Core.Json;
 using BrowserVideoGrabber.Core.Models;
 using BrowserVideoGrabber.Infrastructure.Downloads;
 using BrowserVideoGrabber.Infrastructure.Execution;
@@ -56,10 +58,16 @@ public sealed class AppHost : IDisposable
     /// <summary>设置变更后的持久化防抖延迟，避免用户连续调整时反复写盘。</summary>
     private static readonly TimeSpan PersistDebounceDelay = TimeSpan.FromSeconds(1);
 
+    /// <summary>标签会话列表的序列化配置（中文 URL 保持可读）。</summary>
+    private static readonly JsonSerializerOptions TabsSerializerOptions = JsonModelsContext.CreateOptions();
+
     private readonly IFileSystem _fileSystem = PhysicalFileSystem.Instance;
     private readonly HttpClient _httpClient;
+    private readonly IMediaFetcher _mediaFetcher;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly string _taskFilePath;
+    private readonly string _tabFilePath;
+    private readonly string _historyFilePath;
 
     private System.Threading.Timer? _persistDebounce;
     private bool _disposed;
@@ -75,8 +83,15 @@ public sealed class AppHost : IDisposable
         var settingsFilePath = JsonAppSettingsStore.GetDefaultFilePath();
         var settingsDirectory = Path.GetDirectoryName(settingsFilePath) ?? AppContext.BaseDirectory;
         _taskFilePath = Path.Combine(settingsDirectory, "tasks.json");
+        _tabFilePath = Path.Combine(settingsDirectory, "tabs.json");
+
+        // 收藏与历史与设置/任务同目录，便于用户一次性备份或排查
+        Favorites = new JsonFavoritesRepository(Path.Combine(settingsDirectory, "favorites.json"), _fileSystem);
+        _historyFilePath = Path.Combine(settingsDirectory, "history.json");
+        History = CreateHistoryRepository();
 
         _httpClient = CreateHttpClient();
+        _mediaFetcher = new HttpMediaFetcher(_httpClient, _fileSystem);
         FfmpegLocator = CreateFfmpegLocator();
         Queue = CreateQueue();
     }
@@ -86,6 +101,13 @@ public sealed class AppHost : IDisposable
 
     /// <summary>设置持久化仓储。</summary>
     public JsonAppSettingsStore SettingsStore { get; }
+
+    /// <summary>地址收藏仓储。</summary>
+    public IFavoritesRepository Favorites { get; }
+
+    /// <summary>历史记录仓储。</summary>
+    /// <remarks>设置变更（历史上限）时会被重建，因此不是只读属性。</remarks>
+    public IHistoryRepository History { get; private set; }
 
     /// <summary>ffmpeg 定位器。</summary>
     public FfmpegLocator FfmpegLocator { get; private set; }
@@ -108,6 +130,116 @@ public sealed class AppHost : IDisposable
     {
         ArgumentNullException.ThrowIfNull(webView);
         return new WebView2Sniffer(webView);
+    }
+
+    /// <summary>
+    /// 按当前设置中的历史上限创建历史仓储。
+    /// </summary>
+    /// <returns>历史仓储实例。</returns>
+    /// <remarks>抽成方法是因为构造与「设置变更后重建」两处都要用到，避免两处各写一遍上限取值逻辑。</remarks>
+    private IHistoryRepository CreateHistoryRepository()
+        => new JsonHistoryRepository(_historyFilePath, Settings.MaxHistoryEntries, _fileSystem);
+
+    /// <summary>
+    /// 创建多标签页嗅探协调器。
+    /// </summary>
+    /// <returns>协调器实例。</returns>
+    /// <remarks>
+    /// 多标签下每个标签都要挂一个嗅探器，但界面只认一个 <see cref="IVideoSniffer"/>。
+    /// 协调器持有共享的家族归并索引并把各标签的事件汇总成一条流，
+    /// 于是同一个视频无论在哪个标签被捕获，界面上都只会出现一行。
+    /// 取数器（<see cref="_mediaFetcher"/>）被注入到每个标签嗅探器，
+    /// 使主清单能探测变体时长，从而在嗅探列表上展示视频时长与体积。
+    /// </remarks>
+    public SniffCoordinator CreateSnifferCoordinator()
+        => new(mediaFetcher: _mediaFetcher);
+
+    /// <summary>
+    /// 保存当前会话的标签地址，供下次启动恢复。
+    /// </summary>
+    /// <param name="urls">各标签地址。</param>
+    /// <remarks>
+    /// 受 <c>RestoreTabs</c> 开关控制：关闭时不写文件，
+    /// 这样「不恢复」是彻底的，不会留下仍能被读到的历史痕迹。
+    /// </remarks>
+    public void SaveTabs(IReadOnlyList<string> urls)
+    {
+        ArgumentNullException.ThrowIfNull(urls);
+
+        if (!Settings.RestoreTabs)
+        {
+            TryDeleteFile(_tabFilePath);
+            return;
+        }
+
+        try
+        {
+            var directory = Path.GetDirectoryName(_tabFilePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                _fileSystem.CreateDirectory(directory);
+            }
+
+            var temporaryPath = _tabFilePath + ".tmp";
+
+            using (var stream = _fileSystem.OpenWrite(temporaryPath, append: false))
+            {
+                JsonSerializer.Serialize(stream, urls.ToList(), TabsSerializerOptions);
+            }
+
+            _fileSystem.MoveFile(temporaryPath, _tabFilePath, overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // 会话恢复只是便利功能，写盘失败不应影响退出
+        }
+    }
+
+    /// <summary>
+    /// 载入上次会话的标签地址。
+    /// </summary>
+    /// <returns>标签地址列表；开关关闭、文件不存在或损坏时返回空列表。</returns>
+    public IReadOnlyList<string> LoadTabs()
+    {
+        if (!Settings.RestoreTabs || !_fileSystem.FileExists(_tabFilePath))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            using var stream = _fileSystem.OpenRead(_tabFilePath);
+            var urls = JsonSerializer.Deserialize<List<string>>(stream, TabsSerializerOptions);
+            return urls ?? new List<string>();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
+        catch (IOException)
+        {
+            return Array.Empty<string>();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// 删除文件，忽略一切失败。
+    /// </summary>
+    /// <param name="path">文件路径。</param>
+    private void TryDeleteFile(string path)
+    {
+        try
+        {
+            _fileSystem.DeleteFile(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // 退出路径上的清理失败可忽略
+        }
     }
 
     /// <summary>
@@ -144,6 +276,10 @@ public sealed class AppHost : IDisposable
         Settings = settings.Clone();
         SettingsStore.Save(Settings);
 
+        // 历史上限在仓储构造时固定，改了设置就必须重建，
+        // 否则用户把上限调小后要等到下次启动才生效
+        History = CreateHistoryRepository();
+
         RebuildPipeline();
     }
 
@@ -178,12 +314,12 @@ public sealed class AppHost : IDisposable
         ArgumentNullException.ThrowIfNull(video);
 
         var directory = ResolveOutputDirectory();
-        var baseName = SanitizeFileName(Path.GetFileNameWithoutExtension(video.DisplayTitle));
 
-        if (string.IsNullOrWhiteSpace(baseName))
-        {
-            baseName = "video";
-        }
+        // 文件名默认取当前页面标题（最多 15 字符）；标题尚未加载出来时回退到 URL 派生名。
+        // 派生规则是纯函数，已下沉到 Core 的 FileNameBuilder 以便单元测试覆盖
+        var baseName = FileNameBuilder.Build(
+            video.PageTitle,
+            Path.GetFileNameWithoutExtension(video.DisplayTitle));
 
         var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var candidate = Path.Combine(directory, $"{baseName}_{stamp}.mp4");
@@ -348,8 +484,20 @@ public sealed class AppHost : IDisposable
         var httpOptions = new HttpDownloadOptions { SegmentCount = Math.Max(1, Settings.HttpSegmentCount) };
         var httpHandler = new HttpDownloadHandler(_fileSystem, _httpClient, httpOptions, fallback: ffmpegHandler);
 
-        // mp4 走原生多线程下载器，其余格式走 ffmpeg；两者格式集合互不重叠
-        var factory = new DownloadHandlerFactory([httpHandler, ffmpegHandler]);
+        // HLS 点播走 C# 原生取片链路：逐片校验 + AES-128 解密 + ffmpeg 仅做 -c copy 合并。
+        // 直播流与 ffmpeg 兜底由 HlsDownloadHandler 内部转交 ffmpegHandler。
+        var hlsHandler = new HlsDownloadHandler(
+            _mediaFetcher,
+            _fileSystem,
+            FfmpegLocator,
+            new ProcessRunner(),
+            new FfmpegOptions(),
+            fallback: ffmpegHandler);
+
+        // 注册顺序：更专用的处理器在前。
+        // m3u8 点播由 hlsHandler 接管（直播再转交 ffmpegHandler）；mp4 由 httpHandler 接管；
+        // ts/m4s/mpd 与剩余 m3u8 情形由 ffmpegHandler 兜底。
+        var factory = new DownloadHandlerFactory([hlsHandler, httpHandler, ffmpegHandler]);
 
         var repository = new JsonTaskRepository(_taskFilePath, _fileSystem);
         var options = new DownloadQueueOptions { MaxConcurrency = Math.Max(1, Settings.MaxConcurrency) };
@@ -488,24 +636,4 @@ public sealed class AppHost : IDisposable
     /// </summary>
     /// <param name="name">原始文件名（不含扩展名）。</param>
     /// <returns>可用于文件系统的名称。</returns>
-    private static string SanitizeFileName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return string.Empty;
-        }
-
-        var invalid = Path.GetInvalidFileNameChars();
-        var builder = new System.Text.StringBuilder(name.Length);
-
-        foreach (var character in name)
-        {
-            builder.Append(Array.IndexOf(invalid, character) >= 0 ? '_' : character);
-        }
-
-        var sanitized = builder.ToString().Trim().Trim('.');
-
-        // 过长的标题会撑爆路径长度上限，截断到 80 字符以留出目录与后缀空间
-        return sanitized.Length > 80 ? sanitized[..80] : sanitized;
-    }
 }

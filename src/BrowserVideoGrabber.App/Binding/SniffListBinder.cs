@@ -24,6 +24,7 @@
 
 using BrowserVideoGrabber.Core.Abstractions;
 using BrowserVideoGrabber.Core.Models;
+using BrowserVideoGrabber.Infrastructure.Sniffing;
 
 namespace BrowserVideoGrabber.App.Binding;
 
@@ -85,7 +86,10 @@ public sealed class SniffListBinder : IDisposable
     /// <param name="sender">事件源。</param>
     /// <param name="video">嗅探结果。</param>
     private void OnVideoDetected(object? sender, SniffedVideo video)
-        => Dispatch(() => _pane.AddOrUpdate(video));
+    {
+        SniffDiagnostics.Write($"binder VideoDetected; id={video.Id:N}; url={video.Url}");
+        Dispatch(() => _pane.AddOrUpdate(video));
+    }
 
     /// <summary>
     /// 撤回事件回调：把已被更优条目取代的行从列表移除。

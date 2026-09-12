@@ -11,7 +11,7 @@
 *创建人： yswenli
 *电子邮箱：yswenli@outlook.com
 *创建时间：2026/9/13 01:46:00
-*描述：右下侧下载列表面板，以「待下载 / 正在下载 / 已下载」三个页签组织任务。
+*描述：右下侧下载列表面板，以「正在下载 / 已下载」两个页签组织任务。
 *
 *=================================================
 *修改标记
@@ -33,8 +33,10 @@ namespace BrowserVideoGrabber.App.Panes;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>状态到页签的映射</b>：六个任务状态归入三个页签 ——
-/// 待下载（等待中 / 已暂停）、正在下载（下载中）、已下载（已完成 / 失败 / 已取消）。
+/// <b>状态到页签的映射</b>：六个任务状态归入两个页签 ——
+/// 正在下载（等待中 / 下载中 / 已暂停）、已下载（已完成 / 失败 / 已取消）。
+/// 等待中与已暂停本质上也是「排队中、迟早会下载」，和下载中放在同一页签更符合直觉，
+/// 也避免界面在多数时候空着一个「待下载」标签。
 /// 后三类都是终态，落在同一页签并用「结果」列区分，避免为失败与取消各开一个页签
 /// 而让界面在多数时候空着两个标签。
 /// </para>
@@ -51,7 +53,6 @@ namespace BrowserVideoGrabber.App.Panes;
 public sealed class DownloadPane : UserControl
 {
     private readonly TabControl _tabs;
-    private readonly BufferedListView _pendingList;
     private readonly BufferedListView _runningList;
     private readonly BufferedListView _finishedList;
     private readonly ToolStripLabel _summaryLabel;
@@ -62,7 +63,6 @@ public sealed class DownloadPane : UserControl
     private readonly Dictionary<Guid, BufferedListView> _hostListById = new();
     private readonly Dictionary<Guid, DownloadProgress> _progressById = new();
 
-    private readonly TabPage _pendingPage;
     private readonly TabPage _runningPage;
     private readonly TabPage _finishedPage;
 
@@ -73,18 +73,14 @@ public sealed class DownloadPane : UserControl
     {
         BackColor = Color.FromArgb(250, 250, 250);
 
-        _pendingList = new BufferedListView { Dock = DockStyle.Fill };
-        _pendingList.AddColumns(("标题", 220), ("格式", 80), ("状态", 80), ("地址", 360));
-
         _runningList = new BufferedListView { Dock = DockStyle.Fill };
         _runningList.AddColumns(("标题", 200), ("进度", 80), ("速度", 90), ("已下载", 130), ("地址", 360));
 
         _finishedList = new BufferedListView { Dock = DockStyle.Fill };
         _finishedList.AddColumns(("标题", 200), ("结果", 70), ("大小", 90), ("完成时间", 110), ("说明", 360));
 
-        _pendingPage = new TabPage("待下载 (0)");
-        _pendingPage.Controls.Add(_pendingList);
-
+        // 「正在下载」页签同时承载等待中 / 下载中 / 已暂停三种状态，
+        // 这样被暂停或排队中的任务也能一眼看到，无需切换到另一个空标签
         _runningPage = new TabPage("正在下载 (0)");
         _runningPage.Controls.Add(_runningList);
 
@@ -92,13 +88,21 @@ public sealed class DownloadPane : UserControl
         _finishedPage.Controls.Add(_finishedList);
 
         _tabs = new TabControl { Dock = DockStyle.Fill };
-        _tabs.TabPages.AddRange([_pendingPage, _runningPage, _finishedPage]);
+        _tabs.TabPages.AddRange([_runningPage, _finishedPage]);
 
-        _summaryLabel = new ToolStripLabel("0 个任务");
-
-        var clearFinishedButton = new ToolStripButton("清空已完成")
+        _summaryLabel = new ToolStripLabel("0 个任务")
         {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
+            // 靠右对齐，让计数显示在工具栏右端而非紧贴「清空已完成」按钮
+            Alignment = ToolStripItemAlignment.Right
+        };
+
+        var clearFinishedButton = new ToolStripButton
+        {
+            Text = "清空已完成",
+            Image = CapsuleToolStripRenderer.CreateGlyphIcon("🗑"),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Margin = new Padding(4, 0, 4, 0),
+            Padding = new Padding(6, 2, 6, 2),
             ToolTipText = "从列表中移除全部已完成、失败与已取消的任务"
         };
         clearFinishedButton.Click += (_, _) =>
@@ -107,10 +111,18 @@ public sealed class DownloadPane : UserControl
         var toolbar = new ToolStrip
         {
             GripStyle = ToolStripGripStyle.Hidden,
-            RenderMode = ToolStripRenderMode.System,
-            Dock = DockStyle.Top
+            RenderMode = ToolStripRenderMode.Professional,
+            Renderer = new CapsuleToolStripRenderer(),
+            Dock = DockStyle.Top,
+            Padding = new Padding(4, 2, 4, 2)
         };
-        toolbar.Items.AddRange([new ToolStripLabel("下载列表"), new ToolStripSeparator(), clearFinishedButton]);
+        toolbar.Items.AddRange(
+        [
+            new ToolStripLabel("下载列表"),
+            new ToolStripSeparator(),
+            clearFinishedButton,
+            _summaryLabel
+        ]);
 
         _contextMenu = BuildContextMenu();
 
@@ -118,7 +130,7 @@ public sealed class DownloadPane : UserControl
         Controls.Add(toolbar);
 
         // 列表与页签的右键都要能弹出菜单，否则只有点在行上才有反应
-        foreach (var list in new[] { _pendingList, _runningList, _finishedList })
+        foreach (var list in new[] { _runningList, _finishedList })
         {
             list.MouseUp += OnListMouseUp;
             list.DoubleClick += OnListDoubleClick;
@@ -141,7 +153,6 @@ public sealed class DownloadPane : UserControl
     {
         ArgumentNullException.ThrowIfNull(tasks);
 
-        _pendingList.Items.Clear();
         _runningList.Items.Clear();
         _finishedList.Items.Clear();
 
@@ -249,8 +260,8 @@ public sealed class DownloadPane : UserControl
     /// <returns>目标列表。</returns>
     private BufferedListView GetListView(DownloadStatus status) => status switch
     {
-        DownloadStatus.Running => _runningList,
-        DownloadStatus.Pending or DownloadStatus.Paused => _pendingList,
+        // 下载中 / 等待中 / 已暂停都归入「正在下载」页签
+        DownloadStatus.Running or DownloadStatus.Pending or DownloadStatus.Paused => _runningList,
         _ => _finishedList
     };
 
@@ -285,16 +296,21 @@ public sealed class DownloadPane : UserControl
 
             case DownloadStatus.Pending:
             case DownloadStatus.Paused:
-                BufferedListView.SetSubItemText(item, 1, DisplayText.Format(task.Format));
-                BufferedListView.SetSubItemText(item, 2, DisplayText.Status(task.Status));
-                BufferedListView.SetSubItemText(item, 3, task.Url);
+                // 这两个状态现在和「下载中」共用同一页签（5 列），因此按该页签的列含义填充：
+                // 进度列显示状态文字，速度/已下载留空，地址列放下载链接
+                BufferedListView.SetSubItemText(item, 1, DisplayText.Status(task.Status));
+                BufferedListView.SetSubItemText(item, 2, "-");
+                BufferedListView.SetSubItemText(item, 3, "-");
+                BufferedListView.SetSubItemText(item, 4, task.Url);
                 break;
 
             default:
-                BufferedListView.SetSubItemText(item, 1, DisplayText.Status(task.Status));
+                var isPartial = task.IsPartial;
+                BufferedListView.SetSubItemText(item, 1, isPartial ? "部分完成" : DisplayText.Status(task.Status));
                 BufferedListView.SetSubItemText(item, 2, DisplayText.Size(task.OutputBytes));
                 BufferedListView.SetSubItemText(item, 3, DisplayText.Time(task.FinishedAt));
-                BufferedListView.SetSubItemText(item, 4, ToResultDetail(task));
+                // 部分成功时「说明」列展示缺失时段，而非输出路径，让用户立刻知道产物不完整
+                BufferedListView.SetSubItemText(item, 4, isPartial ? (task.PartialDetail ?? string.Empty) : ToResultDetail(task));
                 break;
         }
 
@@ -314,13 +330,81 @@ public sealed class DownloadPane : UserControl
 
         BufferedListView.SetSubItemText(item, 1, DisplayText.Percent(percent, hasTotal));
 
-        BufferedListView.SetSubItemText(item, 2, DisplayText.Speed(progress?.BytesPerSecond ?? 0d));
+        // 两条链路的速度表达方式不同：ffmpeg 报处理倍率，原生 HTTP 报字节速率
+        BufferedListView.SetSubItemText(item, 2, FormatSpeed(progress));
 
-        var downloaded = progress?.DownloadedBytes ?? 0L;
-        var totalText = progress?.TotalBytes is > 0 ? DisplayText.Size(progress.TotalBytes.Value) : "未知";
-        BufferedListView.SetSubItemText(item, 3, $"{DisplayText.Size(downloaded)} / {totalText}");
+        BufferedListView.SetSubItemText(item, 3, FormatDownloaded(progress, task));
 
         BufferedListView.SetSubItemText(item, 4, task.Url);
+    }
+
+    /// <summary>
+    /// 格式化速度列。
+    /// </summary>
+    /// <param name="progress">进度快照；为 null 时返回 <c>-</c>。</param>
+    /// <returns>
+    /// ffmpeg 链路（有处理倍率）返回 <c>1.2x</c>；原生 HTTP 链路返回 <c>3.4 MB/s</c>；
+    /// 都未知时返回 <c>-</c>。
+    /// </returns>
+    /// <remarks>
+    /// 两条链路产出的进度字段互斥：ffmpeg 只填 <see cref="DownloadProgress.SpeedMultiplier"/>，
+    /// 原生 HTTP 只填 <see cref="DownloadProgress.BytesPerSecond"/>，据此判断用哪种呈现。
+    /// </remarks>
+    private static string FormatSpeed(DownloadProgress? progress)
+    {
+        if (progress is null)
+        {
+            return "-";
+        }
+
+        if (progress.SpeedMultiplier > 0)
+        {
+            return $"{progress.SpeedMultiplier:0.0}x";
+        }
+
+        return DisplayText.Speed(progress.BytesPerSecond);
+    }
+
+    /// <summary>
+    /// 格式化「已下载」列。
+    /// </summary>
+    /// <param name="progress">进度快照；可为 null。</param>
+    /// <param name="task">任务，提供 progress 缺失时的字节快照。</param>
+    /// <returns>
+    /// ffmpeg 链路（有已处理时长）返回 <c>01:20 / 02:00</c>；
+    /// 原生 HTTP 链路返回 <c>12.5 MB / 100 MB</c> 或 <c>12.5 MB / 未知</c>；
+    /// 两者皆无时返回 <c>- / 未知</c>。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// progress 为 null 的情况真实存在：任务状态先变为 Running（触发 <see cref="ApplyState"/>），
+    /// 而第一条进度回调尚未冲洗到界面。此时不应把已下载字节显示成 0，
+    /// 而是回退到 <see cref="DownloadTask.DownloadedBytes"/> —— 队列在每次进度回调里都把
+    /// <see cref="DownloadProgress.DownloadedBytes"/> 回写到了该字段，因此它是「最近一次」的可靠快照。
+    /// </para>
+    /// <para>
+    /// ffmpeg 链路上报的是媒体处理时长而非字节数（<see cref="DownloadProgress.DownloadedBytes"/> 恒为 0），
+    /// 硬套字节格式会把真实进度显示成 <c>- / 未知</c>，故优先识别 <see cref="DownloadProgress.Processed"/>。
+    /// </para>
+    /// </remarks>
+    private static string FormatDownloaded(DownloadProgress? progress, DownloadTask task)
+    {
+        // ffmpeg 链路：用媒体时长表达进度
+        if (progress?.Processed is { } processed)
+        {
+            var total = progress.Total;
+            var totalText = total is { } totalValue
+                ? DisplayText.Duration(totalValue.TotalSeconds)
+                : "未知";
+            return $"{DisplayText.Duration(processed.TotalSeconds)} / {totalText}";
+        }
+
+        // 原生 HTTP 链路：字节进度，progress 缺失时回退任务快照
+        var downloaded = progress?.DownloadedBytes ?? task.DownloadedBytes;
+        var totalText2 = progress?.TotalBytes is > 0
+            ? DisplayText.Size(progress.TotalBytes.Value)
+            : "未知";
+        return $"{DisplayText.Size(downloaded)} / {totalText2}";
     }
 
     /// <summary>
@@ -349,12 +433,11 @@ public sealed class DownloadPane : UserControl
     /// </summary>
     private void UpdateSummary()
     {
-        _pendingPage.Text = $"待下载 ({_pendingList.Items.Count})";
         _runningPage.Text = $"正在下载 ({_runningList.Items.Count})";
         _finishedPage.Text = $"已下载 ({_finishedList.Items.Count})";
 
         _summaryLabel.Text =
-            $"{_pendingList.Items.Count} 个待下载 · {_runningList.Items.Count} 个下载中 · {_finishedList.Items.Count} 个已结束";
+            $"{_runningList.Items.Count} 个下载中 · {_finishedList.Items.Count} 个已结束";
     }
 
     /// <summary>
@@ -436,7 +519,8 @@ public sealed class DownloadPane : UserControl
 
         return action switch
         {
-            DownloadAction.Pause => task.Status == DownloadStatus.Running,
+            // 下载中 / 等待中都可以暂停：排队中的任务也需要「先不跑了」的能力
+            DownloadAction.Pause => task.Status is DownloadStatus.Running or DownloadStatus.Pending,
             DownloadAction.Resume => task.Status == DownloadStatus.Paused,
             DownloadAction.Cancel => task.Status is DownloadStatus.Running or DownloadStatus.Pending or DownloadStatus.Paused,
             DownloadAction.Retry => task.Status is DownloadStatus.Failed or DownloadStatus.Canceled,
@@ -474,9 +558,8 @@ public sealed class DownloadPane : UserControl
     /// <returns>列表控件。</returns>
     private BufferedListView GetActiveList() => _tabs.SelectedIndex switch
     {
-        1 => _runningList,
-        2 => _finishedList,
-        _ => _pendingList
+        1 => _finishedList,
+        _ => _runningList
     };
 
     /// <summary>

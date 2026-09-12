@@ -53,11 +53,17 @@ public sealed class AppSettings
     /// <summary>下载时使用的 User-Agent。为空时使用内嵌浏览器当前 UA。</summary>
     public string? UserAgent { get; set; }
 
-    /// <summary>启动后是否自动进入嗅探状态。默认 true。</summary>
-    public bool SniffEnabled { get; set; } = true;
-
     /// <summary>上次访问的地址，用于启动时恢复。</summary>
     public string? LastUrl { get; set; }
+
+    /// <summary>关闭时是否记住已打开的标签页，下次启动原样恢复。默认 true。</summary>
+    public bool RestoreTabs { get; set; } = true;
+
+    /// <summary>历史记录容量上限（超出时环形淘汰最旧）。默认 500。</summary>
+    public int MaxHistoryEntries { get; set; } = 500;
+
+    /// <summary>同时打开的浏览器标签页上限。默认 10。</summary>
+    public int MaxTabs { get; set; } = 10;
 
     /// <summary>
     /// 创建当前设置的深拷贝。
@@ -71,7 +77,9 @@ public sealed class AppSettings
             MaxConcurrency = MaxConcurrency,
             HttpSegmentCount = HttpSegmentCount,
             UserAgent = UserAgent,
-            SniffEnabled = SniffEnabled,
-            LastUrl = LastUrl
+            LastUrl = LastUrl,
+            RestoreTabs = RestoreTabs,
+            MaxHistoryEntries = MaxHistoryEntries,
+            MaxTabs = MaxTabs
         };
 }

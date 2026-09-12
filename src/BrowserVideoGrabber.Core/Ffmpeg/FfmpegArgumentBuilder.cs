@@ -56,7 +56,8 @@ public static class FfmpegArgumentBuilder
         VideoFormat.M3u8,
         VideoFormat.Ts,
         VideoFormat.M4s,
-        VideoFormat.Mpd
+        VideoFormat.Mpd,
+        VideoFormat.Ismc
     };
 
     /// <summary>

@@ -86,6 +86,29 @@ public sealed class FakeFileSystem : IFileSystem
     public void DeleteFile(string path) => _files.TryRemove(path, out _);
 
     /// <inheritdoc />
+    public bool DeleteDirectory(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        // 先删目录下的文件（含调用方不知道的残留），再删目录本身，
+        // 与真实实现的「递归删除」语义保持一致
+        var prefix = path.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        var children = _files.Keys
+            .Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var child in children)
+        {
+            _files.TryRemove(child, out _);
+        }
+
+        return _directories.TryRemove(path, out _);
+    }
+
+    /// <inheritdoc />
     public Stream OpenWrite(string path, bool append)
     {
         // 追加模式以已有内容为基础构造可写流，写入完成后回写字典，模拟真实文件系统语义
