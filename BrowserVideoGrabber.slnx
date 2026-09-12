@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BrowserVideoGrabber.App/BrowserVideoGrabber.App.csproj" />
+    <Project Path="src/BrowserVideoGrabber.Core/BrowserVideoGrabber.Core.csproj" />
+    <Project Path="src/BrowserVideoGrabber.Infrastructure/BrowserVideoGrabber.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BrowserVideoGrabber.Core.Tests/BrowserVideoGrabber.Core.Tests.csproj" />
+  </Folder>
+</Solution>

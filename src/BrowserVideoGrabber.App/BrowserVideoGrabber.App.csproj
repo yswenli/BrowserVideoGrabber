@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 界面层：WinForms 可执行程序，仅负责界面渲染与事件绑定 -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>BrowserVideoGrabber.App</RootNamespace>
+    <AssemblyName>BrowserVideoGrabber</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Description>BrowserVideoGrabber 主程序：内置浏览器 + 页面视频嗅探 + 多格式视频下载。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BrowserVideoGrabber.Core\BrowserVideoGrabber.Core.csproj" />
+    <ProjectReference Include="..\BrowserVideoGrabber.Infrastructure\BrowserVideoGrabber.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

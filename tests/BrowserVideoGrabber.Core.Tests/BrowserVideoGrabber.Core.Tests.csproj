@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      单元测试工程目标框架为 net10.0-windows：
+      除了测试 Core 层的纯逻辑，还需要直接测试 Infrastructure 层的 ffmpeg 下载编排逻辑
+      （通过注入假进程运行器，不启动真实 ffmpeg）。
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>BrowserVideoGrabber.Tests</RootNamespace>
+    <AssemblyName>BrowserVideoGrabber.Core.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BrowserVideoGrabber.Core\BrowserVideoGrabber.Core.csproj" />
+    <ProjectReference Include="..\..\src\BrowserVideoGrabber.Infrastructure\BrowserVideoGrabber.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

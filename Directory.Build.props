@@ -1,0 +1,37 @@
+<Project>
+
+  <!--
+    解决方案级统一编译属性。
+    各子工程只需声明 TargetFramework / RootNamespace，其余编译期策略在此集中约束。
+  -->
+  <PropertyGroup>
+    <!-- 语言与编译期检查 -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+
+    <!-- 程序集元信息（对应代码文件头注释中的公司/作者/版本信息） -->
+    <Product>BrowserVideoGrabber</Product>
+    <Company>Walle</Company>
+    <Authors>yswenli</Authors>
+    <Copyright>Copyright (c) 2026 RiverLand All Rights Reserved.</Copyright>
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <NeutralLanguage>zh-Hans</NeutralLanguage>
+
+    <!-- 中文场景下必须保留区域性数据，不能启用不变全球化 -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!--
+      WebView2 包同时携带 WPF 与 WinForms 资产，其中 WPF 程序集引用的 WindowsBase 5.0.0.0
+      与 net10.0 引用程序集提供的 4.0.0.0 存在版本差异，会触发 MSB3277。
+      该冲突不影响任何实际功能（本项目从不加载 WebView2 的 WPF 资产），故作降级为消息处理。
+    -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+</Project>
