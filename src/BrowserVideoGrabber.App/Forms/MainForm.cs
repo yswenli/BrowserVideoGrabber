@@ -215,7 +215,22 @@ public sealed class MainForm : Form
         _browserPane.AddressChanged += (_, url) => SetStatus($"已打开：{url}");
 
         _sniffPane.DownloadRequested += OnDownloadRequested;
+
+        // 清空列表必须同时清掉嗅探器的去重记录，否则「清空后可以重新捕获」不成立
+        _sniffPane.ClearRequested += OnSniffClearRequested;
+
         _downloadPane.ActionRequested += OnDownloadAction;
+    }
+
+    /// <summary>
+    /// 处理嗅探面板的清空请求。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">事件参数。</param>
+    private void OnSniffClearRequested(object? sender, EventArgs e)
+    {
+        _sniffer?.Clear();
+        SetStatus("已清空嗅探列表。");
     }
 
     /// <summary>
@@ -377,6 +392,12 @@ public sealed class MainForm : Form
     {
         try
         {
+            if (!ConfirmFragmentDownload(video))
+            {
+                SetStatus("已取消下载该分片地址。");
+                return;
+            }
+
             var outputPath = _host.BuildOutputPath(video);
 
             // 入队时冻结浏览器会话的鉴权信息：下载可能在其后才真正开始，
@@ -409,6 +430,40 @@ public sealed class MainForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+    }
+
+    /// <summary>
+    /// 确认是否下载一个分片条目。
+    /// </summary>
+    /// <param name="video">嗅探结果。</param>
+    /// <returns>用户确认继续下载返回 true；其余格式无需确认，直接返回 true。</returns>
+    /// <remarks>
+    /// 分片条目只有在「同一个视频的清单始终没被捕获」时才会出现在列表里（例如嗅探开关是在播放中途才打开的）。
+    /// 这种情况下最容易发生的事就是用户选中一个 <c>.ts</c> 下载，得到一个只有几秒钟的「视频」，
+    /// 却以为工具把完整视频下载坏了。与其静默产出残缺文件，不如先把话说清楚。
+    /// </remarks>
+    private bool ConfirmFragmentDownload(SniffedVideo video)
+    {
+        if (video.Format is not (VideoFormat.Ts or VideoFormat.M4s))
+        {
+            return true;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            $"当前选中的是一个视频分片，而不是完整视频：{Environment.NewLine}" +
+            $"{video.Url}{Environment.NewLine}{Environment.NewLine}" +
+            "单独下载分片只能得到很短的片段。若列表中还有同一个视频的播放列表条目" +
+            "（格式显示为 M3U8 或 DASH 索引），请改选那一条，才能下载完整视频。" +
+            $"{Environment.NewLine}{Environment.NewLine}" +
+            "提示：如果在页面开始播放之后才打开嗅探开关，可能会漏掉播放列表。" +
+            "重新加载页面并让其开始播放，通常就能抓到。",
+            "该地址是视频分片",
+            MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        return answer == DialogResult.OK;
     }
 
     /// <summary>
@@ -458,6 +513,9 @@ public sealed class MainForm : Form
             case DownloadAction.ClearFinished:
                 var removed = _host.Queue.ClearFinished();
                 _downloadBinder?.RefreshAll();
+
+                // 同 RemoveTask：清空同样不触发事件，需显式安排落盘
+                _host.RequestPersist();
                 SetStatus($"已清空 {removed} 个已结束的任务。");
                 break;
 
@@ -503,11 +561,26 @@ public sealed class MainForm : Form
     private void RemoveTask(DownloadTask task)
     {
         // 队列的 Remove 不触发事件（任务已消失，无从通知），界面需显式同步
-        if (_host.Queue.Remove(task.Id))
+        if (!_host.Queue.Remove(task.Id))
         {
-            _downloadBinder?.RemoveTask(task.Id);
-            SetStatus($"已从列表移除：{task.Title}");
+            // 唯一会失败的情形是任务正在下载：此时文件仍在增长，必须先取消才能安全移除
+            SetStatus($"「{task.Title}」正在下载，请先取消再移除。");
+            MessageBox.Show(
+                this,
+                $"「{task.Title}」正在下载中，无法直接移除。\n\n请先执行「取消」，等下载停止后再把它从列表移除。",
+                "从列表移除",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
         }
+
+        _downloadBinder?.RemoveTask(task.Id);
+
+        // 移除不触发状态变更事件，必须显式安排落盘，
+        // 否则这条任务会留在 tasks.json 里，下次启动又原样出现，看起来像「删不掉」
+        _host.RequestPersist();
+
+        SetStatus($"已从列表移除：{task.Title}");
     }
 
     /// <summary>打开已下载的文件。</summary>
@@ -665,6 +738,11 @@ public sealed class MainForm : Form
         {
             // 退出路径上的清理异常不应阻止关闭
         }
+    }
+
+    private void InitializeComponent()
+    {
+
     }
 
     /// <summary>

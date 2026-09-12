@@ -32,9 +32,14 @@ namespace BrowserVideoGrabber.App.Binding;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 存在的唯一理由是<b>线程封送</b>：<see cref="IVideoSniffer.VideoDetected"/> 在 WebView2 的
-/// 回调线程上触发，而列表控件只能在 UI 线程操作。
+/// 存在的唯一理由是<b>线程封送</b>：<see cref="IVideoSniffer.VideoDetected"/> 与
+/// <see cref="IVideoSniffer.VideoRetracted"/> 都在 WebView2 的回调线程上触发，
+/// 而列表控件只能在 UI 线程操作。
 /// 把这件事收在这个小类里，面板本身就能保持「纯视图」的干净形态。
+/// </para>
+/// <para>
+/// 撤回事件同样需要封送：它对应「某档清晰度先被上报、随后被主清单收编」这一情形，
+/// 必须把那一行从列表移除，否则同一个视频仍会留下两行。
 /// </para>
 /// <para>
 /// 使用 <c>BeginInvoke</c>（异步）而非 <c>Invoke</c>（同步）：嗅探回调位于浏览器内核的消息链路上，
@@ -58,6 +63,7 @@ public sealed class SniffListBinder : IDisposable
         _pane = pane ?? throw new ArgumentNullException(nameof(pane));
 
         _sniffer.VideoDetected += OnVideoDetected;
+        _sniffer.VideoRetracted += OnVideoRetracted;
     }
 
     /// <inheritdoc />
@@ -70,6 +76,7 @@ public sealed class SniffListBinder : IDisposable
 
         _disposed = true;
         _sniffer.VideoDetected -= OnVideoDetected;
+        _sniffer.VideoRetracted -= OnVideoRetracted;
     }
 
     /// <summary>
@@ -78,6 +85,28 @@ public sealed class SniffListBinder : IDisposable
     /// <param name="sender">事件源。</param>
     /// <param name="video">嗅探结果。</param>
     private void OnVideoDetected(object? sender, SniffedVideo video)
+        => Dispatch(() => _pane.AddOrUpdate(video));
+
+    /// <summary>
+    /// 撤回事件回调：把已被更优条目取代的行从列表移除。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="video">被撤回的条目。</param>
+    /// <remarks>
+    /// 条目可能早已被用户手动移除，<c>RemoveItem</c> 会返回 false，属正常情况。
+    /// </remarks>
+    private void OnVideoRetracted(object? sender, SniffedVideo video)
+        => Dispatch(() => _pane.RemoveItem(video.Id));
+
+    /// <summary>
+    /// 把动作封送到 UI 线程执行。
+    /// </summary>
+    /// <param name="action">待执行动作。</param>
+    /// <remarks>
+    /// 使用 <c>BeginInvoke</c>（异步）而非 <c>Invoke</c>（同步）：嗅探回调位于浏览器内核的消息链路上，
+    /// 若在此同步等待 UI 线程，一旦 UI 繁忙就会阻塞浏览器渲染。
+    /// </remarks>
+    private void Dispatch(Action action)
     {
         if (_disposed || _pane.IsDisposed)
         {
@@ -97,14 +126,14 @@ public sealed class SniffListBinder : IDisposable
                 {
                     if (!_disposed && !_pane.IsDisposed)
                     {
-                        _pane.AddOrUpdate(video);
+                        action();
                     }
                 });
 
                 return;
             }
 
-            _pane.AddOrUpdate(video);
+            action();
         }
         catch (ObjectDisposedException)
         {

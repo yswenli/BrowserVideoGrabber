@@ -179,8 +179,11 @@ public sealed class DownloadPane : UserControl
         }
         else if (!ReferenceEquals(_hostListById[task.Id], targetList))
         {
-            // 跨页签迁移：ListViewItem 同一时刻只能属于一个列表，必须先摘除再挂载
+            // 跨页签迁移：ListViewItem 同一时刻只能属于一个列表，必须先摘除再挂载。
+            // 三个页签的列数不同，目标页签更宽时必须先补齐子项，否则多出来的那一列写不进去
+            // （例如「已下载」页签的说明列会永远空白，用户看不到失败原因与输出路径）
             _hostListById[task.Id].Items.Remove(item);
+            BufferedListView.EnsureSubItems(item, targetList);
             targetList.Items.Add(item);
             _hostListById[task.Id] = targetList;
         }
@@ -256,15 +259,11 @@ public sealed class DownloadPane : UserControl
     /// </summary>
     /// <param name="list">宿主列表。</param>
     /// <returns>空行实例。</returns>
+    /// <remarks>子项数量必须一次补齐：WinForms 不会为新增的列自动补占位。</remarks>
     private static ListViewItem CreateItem(BufferedListView list)
     {
-        // 预先补齐子项数量：WinForms 不会自动为新增列补占位，缺项时后续 SetSubItemText 会静默失效
         var item = new ListViewItem(string.Empty);
-        for (var index = 1; index < list.Columns.Count; index++)
-        {
-            item.SubItems.Add(string.Empty);
-        }
-
+        BufferedListView.EnsureSubItems(item, list);
         return item;
     }
 
@@ -424,6 +423,10 @@ public sealed class DownloadPane : UserControl
     /// <param name="action">操作意图。</param>
     /// <param name="task">当前选中的任务；无选中时为 null。</param>
     /// <returns>可用返回 true。</returns>
+    /// <remarks>
+    /// 菜单项在不可用时会被禁用，因此这里的判定必须与队列侧的实际能力一致：
+    /// 参数说明里出现「点了没反应」的项，比不显示这一项更让人困惑。
+    /// </remarks>
     private static bool IsActionAvailable(DownloadAction action, DownloadTask? task)
     {
         if (task is null)
@@ -431,15 +434,17 @@ public sealed class DownloadPane : UserControl
             return action == DownloadAction.ClearFinished;
         }
 
-        var isTerminal = task.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Canceled;
-
         return action switch
         {
             DownloadAction.Pause => task.Status == DownloadStatus.Running,
             DownloadAction.Resume => task.Status == DownloadStatus.Paused,
             DownloadAction.Cancel => task.Status is DownloadStatus.Running or DownloadStatus.Pending or DownloadStatus.Paused,
             DownloadAction.Retry => task.Status is DownloadStatus.Failed or DownloadStatus.Canceled,
-            DownloadAction.Remove => isTerminal,
+
+            // 除「正在下载」外一律可移除：待下载与已暂停的任务尚未落盘，直接移除即可；
+            // 运行中的任务必须先取消，否则文件仍在增长，抹掉这一行会让用户误以为下载已停止
+            DownloadAction.Remove => task.Status != DownloadStatus.Running,
+
             DownloadAction.OpenFile => task.Status == DownloadStatus.Completed,
             DownloadAction.OpenFolder => task.Status == DownloadStatus.Completed,
             DownloadAction.CopyUrl => true,

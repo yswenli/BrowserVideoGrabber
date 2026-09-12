@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using System.Diagnostics;
+
 namespace BrowserVideoGrabber.App.Controls;
 
 /// <summary>
@@ -73,17 +75,48 @@ internal sealed class BufferedListView : ListView
     /// <param name="item">目标行。</param>
     /// <param name="index">子项索引。</param>
     /// <param name="text">新文本。</param>
-    /// <remarks>文本未变化时不赋值，避免触发无谓的重绘。</remarks>
+    /// <remarks>
+    /// <para>文本未变化时不赋值，避免触发无谓的重绘。</para>
+    /// <para>
+    /// 索引越界时不做任何事：<see cref="ListViewItem.SubItems"/> 的越界赋值会被静默丢弃，
+    /// 而视图层绝不能因为一列对不上就让程序崩溃。但「静默」正是这类问题的可怕之处 ——
+    /// 曾出现过任务从「待下载」（4 列）迁移到「已下载」（5 列）后，
+    /// 第 5 列的失败原因永远写不进去、用户完全看不到下载为何失败的情况。
+    /// 因此调试期在这里直接断言失败，让列数不匹配尽早暴露；发布版仍保持静默。
+    /// </para>
+    /// </remarks>
     public static void SetSubItemText(ListViewItem item, int index, string text)
     {
         if (index < 0 || index >= item.SubItems.Count)
         {
+            Debug.Fail($"子项索引 {index} 越界（该行当前只有 {item.SubItems.Count} 个子项）。请检查行的列数是否与所在列表一致。");
             return;
         }
 
         if (!string.Equals(item.SubItems[index].Text, text, StringComparison.Ordinal))
         {
             item.SubItems[index].Text = text;
+        }
+    }
+
+    /// <summary>
+    /// 补齐一行的子项数量，使其与目标列表的列数一致。
+    /// </summary>
+    /// <param name="item">目标行。</param>
+    /// <param name="list">行将要挂载到的列表。</param>
+    /// <remarks>
+    /// 行是在首次出现时按「当时所在页签」的列数创建的，而三个页签的列数并不相同
+    /// （待下载 4 列，正在下载与已下载各 5 列）。任务跨页签迁移时必须先补齐，
+    /// 否则写入多出来的那一列会被静默丢弃。
+    /// </remarks>
+    public static void EnsureSubItems(ListViewItem item, ListView list)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(list);
+
+        while (item.SubItems.Count < list.Columns.Count)
+        {
+            item.SubItems.Add(string.Empty);
         }
     }
 }

@@ -272,6 +272,17 @@ public sealed class AppHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// 安排一次任务列表落盘。
+    /// </summary>
+    /// <remarks>
+    /// 供「移除任务 / 清空已结束」这类<b>不触发状态变更事件</b>的操作调用。
+    /// 队列的 <c>Remove</c> 与 <c>ClearFinished</c> 不会上报事件（任务已消失，无从通知），
+    /// 界面的行是调用方自行同步移除的；若不同时安排落盘，被移除的任务会留在 tasks.json 里，
+    /// 下次启动又原样出现，看起来像「删不掉」。
+    /// </remarks>
+    public void RequestPersist() => SchedulePersist();
+
     /// <inheritdoc />
     public void Dispose()
     {

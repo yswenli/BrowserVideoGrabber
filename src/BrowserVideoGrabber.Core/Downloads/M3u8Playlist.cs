@@ -101,4 +101,40 @@ public sealed class M3u8Playlist
     /// 单例复用可以避免每次解析失败都分配对象；由于本类不可变，共享是安全的。
     /// </remarks>
     public static M3u8Playlist Invalid { get; } = new() { IsValid = false };
+
+    /// <summary>
+    /// 清晰度最高的一档变体；无变体时返回 null。
+    /// </summary>
+    /// <remarks>
+    /// 主清单中各档变体的排列顺序没有规范约束，不能想当然取第一个。
+    /// 这里优先选带分辨率的、再比较声明码率，使界面展示的是「最高可用清晰度」，
+    /// 而不是「恰好排在第一位的那档」。
+    /// </remarks>
+    public M3u8Variant? BestVariant
+    {
+        get
+        {
+            M3u8Variant? best = null;
+
+            foreach (var variant in Variants)
+            {
+                if (best is null)
+                {
+                    best = variant;
+                    continue;
+                }
+
+                var hasResolution = !string.IsNullOrEmpty(variant.Resolution);
+                var bestHasResolution = !string.IsNullOrEmpty(best.Resolution);
+
+                if ((hasResolution && !bestHasResolution)
+                    || (hasResolution == bestHasResolution && variant.Bandwidth > best.Bandwidth))
+                {
+                    best = variant;
+                }
+            }
+
+            return best;
+        }
+    }
 }

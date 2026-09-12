@@ -11,14 +11,14 @@
 *创建人： yswenli
 *电子邮箱：yswenli@outlook.com
 *创建时间：2026/9/12 22:42:00
-*描述：DownloadQueue 的单元测试，覆盖并发上限、状态流转、重试、取消、暂停恢复与失败隔离。
+*描述：DownloadQueue 的单元测试，覆盖并发上限、状态流转、重试、取消、暂停恢复、任务移除与失败隔离。
 *
 *=================================================
 *修改标记
-*修改时间：2026/9/12 22:42:00
+*修改时间：2026/9/13 03:58:00
 *修改人： yswenli
-*版本号： V1.0.0.0
-*描述：
+*版本号： V1.0.1.0
+*描述：补充待下载 / 已暂停 / 运行中 / 终态四类任务的移除行为验证。
 *
 *****************************************************************************/
 
@@ -288,6 +288,126 @@ public sealed class DownloadQueueTests
 
         Assert.Equal(DownloadStatus.Pending, task.Status);
         Assert.Equal(0, handler.AttemptCount);
+    }
+
+    /// <summary>
+    /// 待下载的任务必须可以被移除：加错地址或选错清晰度时，用户最需要的就是把这一条撤掉。
+    /// </summary>
+    [Fact]
+    public async Task Should_RemovePendingTask_BeforeStart()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.Zero };
+        using var queue = CreateQueue(handler);
+
+        var task = CreateTask("removed");
+        queue.Enqueue(task);
+
+        Assert.True(queue.Remove(task.Id));
+        Assert.Empty(queue.Tasks);
+
+        queue.Start();
+        await Task.Delay(150);
+
+        Assert.Equal(0, handler.AttemptCount);
+        Assert.Equal(DownloadStatus.Canceled, task.Status);
+    }
+
+    /// <summary>
+    /// 等待并发槽位期间被移除的任务不得再被执行。
+    /// </summary>
+    /// <remarks>
+    /// 这是移除待下载任务时最容易出错的地方：调度泵可能已经把该任务挑成「下一个要跑的」，
+    /// 只是卡在并发槽位上。若移除时不做处理，用户会看到「任务已经从列表删掉，文件却开始下载了」。
+    /// </remarks>
+    [Fact]
+    public async Task Should_NotStartTaskRemovedWhileWaitingForSlot()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.FromMilliseconds(200) };
+        using var queue = CreateQueue(handler, maxConcurrency: 1);
+
+        var running = CreateTask("running");
+        var waiting = CreateTask("waiting");
+
+        queue.Enqueue(running);
+        queue.Enqueue(waiting);
+        queue.Start();
+
+        // 等第一个任务真正开跑：此时唯一槽位被占满，第二个任务必然滞留在待下载状态
+        await WaitUntilAsync(() => running.Status == DownloadStatus.Running, TimeSpan.FromSeconds(5));
+
+        Assert.True(queue.Remove(waiting.Id));
+        Assert.DoesNotContain(queue.Tasks, task => task.Id == waiting.Id);
+
+        await queue.WaitForCompletionAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, handler.AttemptCount);
+        Assert.Equal(DownloadStatus.Completed, running.Status);
+    }
+
+    /// <summary>
+    /// 已暂停的任务应可移除。
+    /// </summary>
+    [Fact]
+    public async Task Should_RemovePausedTask()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.FromSeconds(5) };
+        using var queue = CreateQueue(handler, maxConcurrency: 1);
+
+        var task = CreateTask("paused");
+        queue.Enqueue(task);
+        queue.Start();
+
+        await WaitUntilAsync(() => task.Status == DownloadStatus.Running, TimeSpan.FromSeconds(5));
+
+        queue.Pause(task.Id);
+        Assert.Equal(DownloadStatus.Paused, task.Status);
+
+        Assert.True(queue.Remove(task.Id));
+        Assert.Empty(queue.Tasks);
+    }
+
+    /// <summary>
+    /// 正在下载的任务不得被移除。
+    /// </summary>
+    /// <remarks>
+    /// 处理器仍在写盘，若允许直接移除，文件会继续增长而列表上已看不到这一行，
+    /// 用户会误以为下载已经停止。此类任务必须先取消。
+    /// </remarks>
+    [Fact]
+    public async Task Should_RefuseRemoveOfRunningTask()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.FromMilliseconds(300) };
+        using var queue = CreateQueue(handler, maxConcurrency: 1);
+
+        var task = CreateTask("running");
+        queue.Enqueue(task);
+        queue.Start();
+
+        await WaitUntilAsync(() => task.Status == DownloadStatus.Running, TimeSpan.FromSeconds(5));
+
+        Assert.False(queue.Remove(task.Id));
+        Assert.Contains(queue.Tasks, item => item.Id == task.Id);
+
+        await queue.WaitForCompletionAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(DownloadStatus.Completed, task.Status);
+    }
+
+    /// <summary>
+    /// 终态任务仍可移除，且移除后不再出现在任务列表中。
+    /// </summary>
+    [Fact]
+    public async Task Should_RemoveTerminalTask()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.Zero };
+        using var queue = CreateQueue(handler);
+
+        var task = CreateTask("done");
+        queue.Enqueue(task);
+        queue.Start();
+        await queue.WaitForCompletionAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(queue.Remove(task.Id));
+        Assert.Empty(queue.Tasks);
     }
 
     /// <summary>

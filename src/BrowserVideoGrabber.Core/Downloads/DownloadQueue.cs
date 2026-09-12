@@ -320,18 +320,42 @@ public sealed class DownloadQueue : IDisposable
     }
 
     /// <summary>
-    /// 从队列中移除指定任务（仅限终态任务）。
+    /// 从队列中移除指定任务。
     /// </summary>
     /// <param name="taskId">任务标识。</param>
-    /// <returns>移除成功返回 true；任务不存在或仍在进行中返回 false。</returns>
+    /// <returns>移除成功返回 true；任务不存在或正在下载而无法安全移除时返回 false。</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>为什么允许移除尚未开始的任务</b>：用户加错地址、或在整档清晰度里选错了条目，
+    /// 最需要的操作就是「把这一条撤掉」。早期实现只允许移除终态任务，
+    /// 待下载页签上的任务因此无法删除，只能先取消再删，是明显的可用性缺陷。
+    /// </para>
+    /// <para>
+    /// <b>为什么运行中的任务不允许移除</b>：处理器正在写盘，直接把行抹掉会让用户误以为下载已停止，
+    /// 而实际上文件仍在增长。此类任务必须先取消 —— 取消会终止 ffmpeg 进程树并清理临时文件。
+    /// </para>
+    /// <para>
+    /// 本方法不触发状态变更事件：任务已从队列消失，任何后续事件都会让界面把这一行重新建出来。
+    /// 因此调用方需要自行同步界面，并在必要时安排一次任务列表落盘。
+    /// </para>
+    /// </remarks>
     public bool Remove(Guid taskId)
     {
         lock (_gate)
         {
             var task = FindTask(taskId);
-            if (task is null || !IsTerminal(task.Status))
+            if (task is null || task.Status == DownloadStatus.Running)
             {
                 return false;
+            }
+
+            // 尚未开始的任务可能已被调度泵选中、正在等待并发槽位。
+            // 先把它置为取消终态，泵在认领时校验状态就会失败并归还槽位，
+            // 否则会出现「任务已从列表移除却仍然被启动」的诡异情况。
+            if (task.Status is DownloadStatus.Pending or DownloadStatus.Paused)
+            {
+                task.Status = DownloadStatus.Canceled;
+                task.FinishedAt ??= DateTimeOffset.Now;
             }
 
             _retryNotBefore.Remove(taskId);

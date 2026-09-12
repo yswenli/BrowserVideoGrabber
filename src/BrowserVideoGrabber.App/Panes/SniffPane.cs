@@ -75,7 +75,14 @@ public sealed class SniffPane : UserControl
             DisplayStyle = ToolStripItemDisplayStyle.Text,
             ToolTipText = "清空已嗅探到的资源；清空后同一资源可以再次被捕获"
         };
-        clearButton.Click += (_, _) => ClearItems();
+        clearButton.Click += (_, _) =>
+        {
+            ClearItems();
+
+            // 光清空视图是不够的：嗅探器内部的去重索引仍记着这些资源，
+            // 不清掉的话「清空后同一资源可以再次被捕获」这句提示就是假的
+            ClearRequested?.Invoke(this, EventArgs.Empty);
+        };
 
         var toolbar = new ToolStrip
         {
@@ -95,6 +102,16 @@ public sealed class SniffPane : UserControl
 
     /// <summary>请求把某个资源加入下载队列。</summary>
     public event EventHandler<SniffedVideo>? DownloadRequested;
+
+    /// <summary>
+    /// 请求清空嗅探器内部的去重记录。
+    /// </summary>
+    /// <remarks>
+    /// 面板只负责视图，无从访问嗅探器，因此把这件事作为意图抛给宿主。
+    /// 若不处理该事件，界面上列表已空、而嗅探器仍认为这些资源「已上报过」，
+    /// 用户重新播放同一视频时将什么也刷不出来。
+    /// </remarks>
+    public event EventHandler? ClearRequested;
 
     /// <summary>列表中当前的资源数量。</summary>
     public int ItemCount => _itemsById.Count;
@@ -131,8 +148,9 @@ public sealed class SniffPane : UserControl
     }
 
     /// <summary>
-    /// 清空列表。
+    /// 清空视图列表。
     /// </summary>
+    /// <remarks>只影响本面板；嗅探器的去重记录由 <see cref="ClearRequested"/> 的订阅方清理。</remarks>
     public void ClearItems()
     {
         _listView.Items.Clear();
