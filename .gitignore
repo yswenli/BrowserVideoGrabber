@@ -33,6 +33,9 @@ coverage*.info
 /Output/
 /Downloads/
 
+## 忽略智能体工作区记忆（保留在本地，不随代码库分发）
+.workbuddy/
+
 ## 忽略操作系统文件
 Thumbs.db
 ehthumbs.db
