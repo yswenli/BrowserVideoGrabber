@@ -10,6 +10,8 @@
   <a href="README.md">🇨🇳 中文</a> · <a href="README.en.md">🇬🇧 English Version</a>
 </p>
 
+![BrowserVideoGrabber UI Preview](ui.png)
+
 ---
 
 ## ✨ What can it do?

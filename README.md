@@ -10,9 +10,7 @@
   <a href="README.en.md">🇬🇧 English Version</a> · <a href="README.md">🇨🇳 中文</a>
 </p>
 
-<p align="center">
-  <img src="ui.png" alt="BrowserVideoGrabber 界面预览" width="820" style="border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.12);" />
-</p>
+![BrowserVideoGrabber 界面预览](ui.png)
 
 ---
 
