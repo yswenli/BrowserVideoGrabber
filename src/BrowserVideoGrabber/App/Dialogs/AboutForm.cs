@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using BrowserVideoGrabber.App;
+
 using System.Reflection;
 
 namespace BrowserVideoGrabber.App.Dialogs;
@@ -51,9 +53,21 @@ public sealed class AboutForm : Form
         "• HLS 分片级下载：AES-128 自动解密、分片级 HTTP Range 校验、断点续传，" + Environment.NewLine +
         "  最后由 ffmpeg 封装成一个完整的 MP4 文件。" + Environment.NewLine +
         "• MP4 直链支持多线程分片并发下载，显著缩短大文件下载时间。" + Environment.NewLine +
-        "• 多标签内置浏览器，共享同一份 Cookie 与登录态，切换标签或关闭后再打开页面" + Environment.NewLine +
-        "  都能继续下载，无需重新登录。" + Environment.NewLine + Environment.NewLine +
+        "• 多标签内置浏览器，共享同一份 Cookie 与登录态。" + Environment.NewLine + Environment.NewLine +
         "技术栈：.NET 10 / WinForms / Microsoft.Web.WebView2 / ffmpeg。";
+
+    /// <summary>免责声明文本。</summary>
+    private static readonly string DisclaimerText =
+        "⚠ 本软件仅供技术学习、研究与个人合法用途。" + Environment.NewLine + Environment.NewLine +
+        "1. 用户通过本软件获取和下载的任何内容（包括但不限于视频、音频、直播流），" +
+        "必须遵守中华人民共和国相关法律法规、遵守内容源网站的用户协议与版权政策。" + Environment.NewLine +
+        "2. 严禁将本软件用于侵犯他人知识产权、商业牟利、传播淫秽或违反公序良俗的内容、" +
+        "或从事其他任何违法违规活动。" + Environment.NewLine +
+        "3. 因用户违规使用本软件而产生的一切直接或间接法律责任，由用户本人独立承担，" +
+        "本软件作者及相关方不承担任何连带责任。" + Environment.NewLine +
+        "4. 本软件嗅探到的视频地址、加密参数等信息均来源于用户合法访问的页面，" +
+        "作者不对嗅探结果的准确性、可用性、完整性做任何明示或默示的保证。" + Environment.NewLine +
+        "5. 如您在使用过程中发现任何权利主张、合规风险或技术问题，请立即停止使用并联系相关方。";
 
     /// <summary>
     /// 初始化「关于」对话框。
@@ -62,8 +76,8 @@ public sealed class AboutForm : Form
     {
         Text = "关于";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(630, 360);
-        MinimumSize = new Size(630, 360);
+        ClientSize = new Size(630, 520);
+        MinimumSize = new Size(630, 520);
         Font = new Font("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -111,14 +125,38 @@ public sealed class AboutForm : Form
             Text = ProductDescription,
             AutoSize = false,
             Location = new Point(20, 94),
-            Size = new Size(590, 200)
+            Size = new Size(590, 180)
+        };
+
+        var disclaimerTitle = new Label
+        {
+            Text = "使用免责声明",
+            Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(200, 90, 0),
+            AutoSize = true,
+            Location = new Point(20, 282)
+        };
+
+        var disclaimerBox = new RichTextBox
+        {
+            Text = DisclaimerText,
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
+            BackColor = Color.FromArgb(253, 248, 235),
+            ForeColor = Color.FromArgb(90, 60, 0),
+            BorderStyle = BorderStyle.FixedSingle,
+            WordWrap = true,
+            Location = new Point(20, 308),
+            Size = new Size(590, 140),
+            Font = new Font("Microsoft YaHei UI", 8.5F)
         };
 
         var authorLabel = new Label
         {
             Text = "作者：yswenli（yswenli@outlook.com）",
             AutoSize = true,
-            Location = new Point(20, 304)
+            Location = new Point(20, 462)
         };
 
         var copyrightLabel = new Label
@@ -126,7 +164,7 @@ public sealed class AboutForm : Form
             Text = "Copyright © 2026 RiverLand All Rights Reserved.",
             ForeColor = Color.FromArgb(110, 110, 110),
             AutoSize = true,
-            Location = new Point(20, 326)
+            Location = new Point(20, 484)
         };
 
         var okButton = new Button
@@ -134,7 +172,7 @@ public sealed class AboutForm : Form
             Text = "确定",
             DialogResult = DialogResult.OK,
             Size = new Size(84, 28),
-            Location = new Point(526, 326),
+            Location = new Point(526, 484),
             FlatStyle = FlatStyle.System
         };
 
@@ -144,6 +182,8 @@ public sealed class AboutForm : Form
             versionLabel,
             separator,
             descriptionLabel,
+            disclaimerTitle,
+            disclaimerBox,
             authorLabel,
             copyrightLabel,
             okButton]);

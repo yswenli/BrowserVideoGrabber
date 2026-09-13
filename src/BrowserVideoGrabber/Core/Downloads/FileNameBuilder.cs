@@ -96,7 +96,7 @@ public static class FileNameBuilder
     /// 去掉首尾点号是 Windows 的实际约束：以点号结尾的文件名会被系统自动去掉尾部点，
     /// 于是「写入 A. 实际得到 A」—— 后续按 A. 查找就会找不到。
     /// </remarks>
-    private static string Sanitize(string? name)
+    internal static string Sanitize(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -128,7 +128,7 @@ public static class FileNameBuilder
     /// 截断位置若落在代理项对的高半区，则回退一个字符 —— 否则会产生半个 Unicode 字符，
     /// 序列化成 JSON 或写进日志时变成乱码问号。
     /// </remarks>
-    private static string Truncate(string value, int maxLength)
+    internal static string Truncate(string value, int maxLength)
     {
         if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
         {

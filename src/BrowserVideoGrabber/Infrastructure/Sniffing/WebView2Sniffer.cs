@@ -691,13 +691,24 @@ public sealed class WebView2Sniffer : IVideoSniffer, IDisposable
     }
 
     /// <summary>
-    /// 读取当前页面标题，无效时返回 null。
+    /// 读取当前页面标题，清洗非法字符并截断到 15 字符。
     /// </summary>
-    /// <returns>页面标题；未就绪或为空时返回 null。</returns>
+    /// <returns>清洗后的页面标题；无效时返回 null。</returns>
+    /// <remarks>
+    /// 嗅探阶段就把 PageTitle 处理成干净的文件名主干 —— 避免后续 FileNameBuilder 再跑一遍
+    /// 时，原始超长标题在 UI 列表里占难看的宽。与 <see cref="FileNameBuilder.Build"/> 保持
+    /// 同一套 Sanitize + Truncate 逻辑，两端行为一致。
+    /// </remarks>
     private string? CurrentPageTitle()
     {
-        var title = _webView.CoreWebView2?.DocumentTitle;
-        return string.IsNullOrWhiteSpace(title) ? null : title;
+        var raw = _webView.CoreWebView2?.DocumentTitle;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var clean = FileNameBuilder.Truncate(FileNameBuilder.Sanitize(raw), FileNameBuilder.DefaultMaxLength);
+        return string.IsNullOrWhiteSpace(clean) ? null : clean;
     }
 
     /// <summary>

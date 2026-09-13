@@ -22,6 +22,7 @@
 *
 *****************************************************************************/
 
+using BrowserVideoGrabber.App;
 using BrowserVideoGrabber.App.Forms;
 
 namespace BrowserVideoGrabber.App;

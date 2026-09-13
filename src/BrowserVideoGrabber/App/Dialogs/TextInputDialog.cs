@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using BrowserVideoGrabber.App;
+
 namespace BrowserVideoGrabber.App.Dialogs;
 
 /// <summary>

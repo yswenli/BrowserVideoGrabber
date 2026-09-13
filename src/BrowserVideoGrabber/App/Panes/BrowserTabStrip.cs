@@ -142,7 +142,8 @@ public sealed class BrowserTabStrip : Control
             DrawTab(graphics, _tabs[index], index);
         }
 
-        DrawNewButton(graphics);
+        // 已移除此处的「新建标签」按钮绘制：标签数量受 MaxTabs 限制，
+        // 且浏览器主入口已有新建能力（地址栏 / 菜单），这里不再重复
     }
 
     /// <inheritdoc />
@@ -186,9 +187,9 @@ public sealed class BrowserTabStrip : Control
 
         var hit = HitTest(e.Location);
 
+        // 已禁用 OnNew 分支：不再绘制也不再响应新建按钮
         if (hit.OnNew)
         {
-            NewTabRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 

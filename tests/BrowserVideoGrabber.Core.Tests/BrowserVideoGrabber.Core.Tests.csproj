@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!--
@@ -22,12 +22,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\BrowserVideoGrabber.Core\BrowserVideoGrabber.Core.csproj" />
-    <ProjectReference Include="..\..\src\BrowserVideoGrabber.Infrastructure\BrowserVideoGrabber.Infrastructure.csproj" />
+    <Using Include="Xunit" />
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
+    <ProjectReference Include="..\..\src\BrowserVideoGrabber\BrowserVideoGrabber.csproj" />
   </ItemGroup>
 
 </Project>

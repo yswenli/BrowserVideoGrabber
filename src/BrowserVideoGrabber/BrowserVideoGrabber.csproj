@@ -28,10 +28,7 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\BrowserVideoGrabber.Core\BrowserVideoGrabber.Core.csproj" />
-    <ProjectReference Include="..\BrowserVideoGrabber.Infrastructure\BrowserVideoGrabber.Infrastructure.csproj" />
-  </ItemGroup>
+  
 
   <ItemGroup>
     <TrimmerRootDescriptor Include="rd.xml" />

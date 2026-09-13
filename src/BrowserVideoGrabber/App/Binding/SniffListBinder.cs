@@ -22,6 +22,7 @@
 *
 *****************************************************************************/
 
+using BrowserVideoGrabber.App.Panes;
 using BrowserVideoGrabber.Core.Abstractions;
 using BrowserVideoGrabber.Core.Models;
 using BrowserVideoGrabber.Infrastructure.Sniffing;
@@ -50,7 +51,7 @@ namespace BrowserVideoGrabber.App.Binding;
 public sealed class SniffListBinder : IDisposable
 {
     private readonly IVideoSniffer _sniffer;
-    private readonly Panes.SniffPane _pane;
+    private readonly SniffPane _pane;
     private bool _disposed;
 
     /// <summary>
@@ -58,7 +59,7 @@ public sealed class SniffListBinder : IDisposable
     /// </summary>
     /// <param name="sniffer">嗅探器。</param>
     /// <param name="pane">目标面板。</param>
-    public SniffListBinder(IVideoSniffer sniffer, Panes.SniffPane pane)
+    public SniffListBinder(IVideoSniffer sniffer, SniffPane pane)
     {
         _sniffer = sniffer ?? throw new ArgumentNullException(nameof(sniffer));
         _pane = pane ?? throw new ArgumentNullException(nameof(pane));

@@ -24,6 +24,7 @@
 
 using System.Net;
 using System.Text.Json;
+
 using BrowserVideoGrabber.Core.Abstractions;
 using BrowserVideoGrabber.Core.Configuration;
 using BrowserVideoGrabber.Core.Downloads;
@@ -35,6 +36,7 @@ using BrowserVideoGrabber.Infrastructure.Execution;
 using BrowserVideoGrabber.Infrastructure.Ffmpeg;
 using BrowserVideoGrabber.Infrastructure.Sniffing;
 using BrowserVideoGrabber.Infrastructure.Storage;
+
 using Microsoft.Web.WebView2.WinForms;
 
 namespace BrowserVideoGrabber.App;

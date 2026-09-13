@@ -31,7 +31,9 @@
 *****************************************************************************/
 
 using System.ComponentModel;
+
 using BrowserVideoGrabber.App.Controls;
+
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -82,9 +84,6 @@ public sealed class BrowserPane : UserControl
     private bool _pageFavorited;
     private readonly ToolStripTextBox _addressBox;
 
-    private readonly ToolStripLabel _loadingLabel;
-    private readonly ToolStripProgressBar _loadingBar;
-
     private readonly List<BrowserTab> _tabs = new();
 
     private CoreWebView2Environment? _environment;
@@ -101,43 +100,30 @@ public sealed class BrowserPane : UserControl
         _backButton = CreateNavButton("←", "后退", (_, _) => NavigateBack());
         _forwardButton = CreateNavButton("→", "前进", (_, _) => NavigateForward());
         _refreshButton = CreateNavButton("⟳", "刷新", (_, _) => _activeTab?.Reload());
-        _stopButton = CreateNavButton("⏹", "停止", (_, _) => _activeTab?.Stop());
-
-        _addressBox = new ToolStripTextBox
-        {
-            AutoSize = false,
-            Width = 380,
-            ToolTipText = "输入网址后回车；也可直接输入关键词进行搜索"
-        };
-        _addressBox.KeyDown += OnAddressBoxKeyDown;
-
-        _goButton = CreateNavButton("↵", "转到", (_, _) => Navigate(_addressBox.Text));
-
         _favoriteButton = CreateNavButton("☆", "收藏", OnFavoriteButtonClick);
 
-        // 加载提示器：导航开始显示在跑马灯进度条 + 「加载中…」，导航完成后隐藏。
-        _loadingLabel = new ToolStripLabel("加载中…") { Visible = false };
-        _loadingBar = new ToolStripProgressBar
-        {
-            Visible = false,
-            Style = ProgressBarStyle.Marquee,
-            Width = 100,
-            MarqueeAnimationSpeed = 30
-        };
+        // Spring 版地址栏：自动撑满左侧导航组与右侧 GO/⏹ 之间的剩余空间
+        // ToolStripSpringTextBox 在 .NET 中是 internal，但通过反射/activator 创建可靠且是 MS 推荐用法
+        _addressBox = CreateSpringAddressBox();
+        _addressBox.KeyDown += OnAddressBoxKeyDown;
+
+        // 右侧组的按钮：Alignment = Right 会让 ToolStrip 把该项及之后所有项整体靠右
+        _goButton = CreateNavButton("↵", "GO", (_, _) => Navigate(_addressBox.Text));
+        _goButton.Alignment = ToolStripItemAlignment.Right;
+
+        _stopButton = CreateNavButton("⏹", "停止", (_, _) => _activeTab?.Stop());
+        _stopButton.Alignment = ToolStripItemAlignment.Right;
 
         _toolStrip.Items.AddRange(
         [
             _backButton,
             _forwardButton,
             _refreshButton,
-            _stopButton,
+            _favoriteButton,
             new ToolStripSeparator(),
             _addressBox,
             _goButton,
-            _favoriteButton,
-            new ToolStripSeparator(),
-            _loadingLabel,
-            _loadingBar
+            _stopButton
         ]);
 
         _tabStrip.TabSelected += (_, tab) => ActivateTab(tab);
@@ -153,6 +139,46 @@ public sealed class BrowserPane : UserControl
         Controls.Add(_tabStrip);
 
         UpdateNavigationState();
+    }
+
+    /// <summary>
+    /// 创建一个自动填充剩余空间的地址栏。
+    /// </summary>
+    /// <returns>ToolStripTextBox（如果 ToolStripSpringTextBox 不可用则回退到普通版）。</returns>
+    /// <remarks>
+    /// <see cref="ToolStripSpringTextBox"/> 在 .NET 5+ 中被标记为 internal，
+    /// 但它的设计就是 ToolStrip 地址栏的标准做法 —— 用反射激活它比手写 Resize 事件更可靠。
+    /// 反射失败时回退到普通 ToolStripTextBox + 固定初始宽度，保证任何环境都能跑。
+    /// </remarks>
+    private static ToolStripTextBox CreateSpringAddressBox()
+    {
+        try
+        {
+            var springType = typeof(ToolStripTextBox).Assembly.GetType(
+                "System.Windows.Forms.ToolStripSpringTextBox",
+                throwOnError: false);
+
+            if (springType is not null)
+            {
+                var instance = Activator.CreateInstance(springType) as ToolStripTextBox;
+                if (instance is not null)
+                {
+                    instance.ToolTipText = "输入网址后回车；也可直接输入关键词进行搜索";
+                    return instance;
+                }
+            }
+        }
+        catch
+        {
+            // 反射失败不致命，回退
+        }
+
+        return new ToolStripTextBox
+        {
+            AutoSize = false,
+            Width = 380,
+            ToolTipText = "输入网址后回车；也可直接输入关键词进行搜索"
+        };
     }
 
     /// <summary>同时打开的标签页上限。默认 10。</summary>
@@ -380,6 +406,7 @@ public sealed class BrowserPane : UserControl
         UpdateNavigationState();
 
         ActiveTabChanged?.Invoke(this, EventArgs.Empty);
+        MessageReported?.Invoke(this, _loading ? "加载中…" : "就绪");
     }
 
     /// <summary>
@@ -455,6 +482,7 @@ public sealed class BrowserPane : UserControl
         tab.Navigated += OnTabNavigated;
         tab.NavigationFailed += OnTabNavigationFailed;
         tab.VideoScanRequested += OnTabVideoScanRequested;
+        tab.NewWindowRequested += OnTabNewWindowRequested;
     }
 
     /// <summary>
@@ -469,11 +497,34 @@ public sealed class BrowserPane : UserControl
         tab.Navigated -= OnTabNavigated;
         tab.NavigationFailed -= OnTabNavigationFailed;
         tab.VideoScanRequested -= OnTabVideoScanRequested;
+        tab.NewWindowRequested -= OnTabNewWindowRequested;
     }
 
     /// <summary>标签页右键「下载视频」：把意图原样抛给上层。</summary>
     private void OnTabVideoScanRequested(object? sender, BrowserTab tab)
         => VideoScanRequested?.Invoke(this, tab);
+
+    /// <summary>
+    /// 标签请求打开新窗口：路由到新标签页。
+    /// </summary>
+    /// <param name="sender">源标签。</param>
+    /// <param name="url">目标 URL。</param>
+    /// <remarks>
+    /// WebView2 <c>NewWindowRequested</c> 事件是同步的，这里用 fire-and-forget
+    /// 调 <see cref="AddTabAsync"/>，异常通过 <see cref="MessageReported"/> 告知用户，
+    /// 不应该把异常冒泡到 WebView2 内核层。
+    /// </remarks>
+    private async void OnTabNewWindowRequested(object? sender, string url)
+    {
+        try
+        {
+            await AddTabAsync(url).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            MessageReported?.Invoke(this, $"打开新标签失败：{exception.Message}");
+        }
+    }
 
     /// <summary>标签标题变化：刷新标签条。</summary>
     private void OnTabTitleChanged(object? sender, BrowserTab tab)
@@ -495,7 +546,7 @@ public sealed class BrowserPane : UserControl
         }
     }
 
-    /// <summary>标签加载状态变化：活动标签时联动加载提示器。</summary>
+    /// <summary>活动标签加载状态变化：联动刷新/停止按钮，同时把状态抛到底部 status bar。</summary>
     private void OnTabLoadingChanged(object? sender, BrowserTab tab)
     {
         if (!ReferenceEquals(tab, _activeTab))
@@ -505,6 +556,9 @@ public sealed class BrowserPane : UserControl
 
         _loading = tab.IsLoading;
         UpdateNavigationState();
+
+        // 加载状态通过 MessageReported 抛给 MainForm → 底部 statusStrip 显示
+        MessageReported?.Invoke(this, _loading ? "加载中…" : "就绪");
     }
 
     /// <summary>
@@ -646,7 +700,7 @@ public sealed class BrowserPane : UserControl
         Navigate(_addressBox.Text);
     }
 
-    /// <summary>刷新前进/后退按钮与加载提示器的状态。</summary>
+    /// <summary>刷新前进/后退按钮的启用状态。</summary>
     private void UpdateNavigationState()
     {
         var core = _activeTab?.IsCoreReady == true ? _activeTab!.WebView.CoreWebView2 : null;
@@ -655,10 +709,6 @@ public sealed class BrowserPane : UserControl
         _forwardButton.Enabled = core?.CanGoForward == true;
         _refreshButton.Enabled = _activeTab is not null && !_loading;
         _stopButton.Enabled = _loading;
-
-        // 加载提示器只在导航进行中可见
-        _loadingLabel.Visible = _loading;
-        _loadingBar.Visible = _loading;
     }
 }
 

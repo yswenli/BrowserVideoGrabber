@@ -24,11 +24,13 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+
+using BrowserVideoGrabber.App;
 using BrowserVideoGrabber.App.Binding;
 using BrowserVideoGrabber.App.Controls;
-using BrowserVideoGrabber.App.Dialogs;
 using BrowserVideoGrabber.App.Formatting;
 using BrowserVideoGrabber.App.Panes;
+using BrowserVideoGrabber.App.Dialogs;
 using BrowserVideoGrabber.Core.Abstractions;
 using BrowserVideoGrabber.Core.Models;
 using BrowserVideoGrabber.Infrastructure.Sniffing;

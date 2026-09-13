@@ -112,6 +112,15 @@ public sealed class BrowserTab : IDisposable
     public event EventHandler<BrowserTab>? VideoScanRequested;
 
     /// <summary>
+    /// 页面请求打开新窗口（window.open / target="_blank"）。
+    /// </summary>
+    /// <remarks>
+    /// 我们始终把新窗口请求路由到新标签（见 BrowserPane 的处理），
+    /// 绝不允许系统弹出独立 WebView2 窗口 —— 那会脱离统一的会话与嗅探体系。
+    /// </remarks>
+    public event EventHandler<string>? NewWindowRequested;
+
+    /// <summary>
     /// 让本标签使用指定的共享环境完成内核初始化。
     /// </summary>
     /// <param name="environment">共享的 WebView2 环境。</param>
@@ -257,6 +266,7 @@ public sealed class BrowserTab : IDisposable
         core.SourceChanged += OnSourceChanged;
         core.DocumentTitleChanged += OnDocumentTitleChanged;
         core.ContextMenuRequested += OnContextMenuRequested;
+        core.NewWindowRequested += OnNewWindowRequested;
 
         _subscribed = true;
         IsCoreReady = true;
@@ -287,6 +297,7 @@ public sealed class BrowserTab : IDisposable
             core.SourceChanged -= OnSourceChanged;
             core.DocumentTitleChanged -= OnDocumentTitleChanged;
             core.ContextMenuRequested -= OnContextMenuRequested;
+            core.NewWindowRequested -= OnNewWindowRequested;
         }
         catch (InvalidOperationException)
         {
@@ -294,6 +305,40 @@ public sealed class BrowserTab : IDisposable
         }
 
         _subscribed = false;
+    }
+
+    /// <summary>
+    /// 页面请求打开新窗口（a target="_blank" / window.open）：拦截并路由到 BrowserPane 创建新标签。
+    /// </summary>
+    /// <param name="sender">事件源（内核对象）。</param>
+    /// <param name="e">事件参数，携带目标 URL。</param>
+    /// <remarks>
+    /// 只设 <c>e.Handled = true</c> 阻止 WebView2 默认行为（弹独立窗口或复用当前 tab），
+    /// 但<b>不主动把 NewWindow 置空</b> —— 部分 WebView2 版本在 Handled=true + NewWindow=null
+    /// 时会把导航完全吞掉或产生异常。让 BrowserPane 在自己的 WebView 上调 Navigate 更可靠。
+    /// </remarks>
+    private void OnNewWindowRequested(
+        object? sender,
+        CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        try
+        {
+            // 只要 Handled=true 就足以阻止 WebView2 的自动弹窗/复用当前 tab
+            e.Handled = true;
+
+            var targetUrl = e.Uri;
+            if (string.IsNullOrWhiteSpace(targetUrl)
+                || targetUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            NewWindowRequested?.Invoke(this, targetUrl);
+        }
+        catch (InvalidOperationException)
+        {
+            // 控件释放竞态
+        }
     }
 
     /// <summary>

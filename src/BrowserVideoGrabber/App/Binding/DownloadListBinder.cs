@@ -23,6 +23,9 @@
 *****************************************************************************/
 
 using System.Collections.Concurrent;
+
+using BrowserVideoGrabber.App;
+using BrowserVideoGrabber.App.Panes;
 using BrowserVideoGrabber.Core.Downloads;
 using BrowserVideoGrabber.Core.Models;
 
@@ -57,7 +60,7 @@ public sealed class DownloadListBinder : IDisposable
     private const int ThrottleIntervalMilliseconds = 200;
 
     private readonly AppHost _host;
-    private readonly Panes.DownloadPane _pane;
+    private readonly DownloadPane _pane;
     private readonly ConcurrentDictionary<Guid, DownloadProgress> _pendingProgress = new();
     private readonly System.Windows.Forms.Timer _throttleTimer;
 
@@ -68,7 +71,7 @@ public sealed class DownloadListBinder : IDisposable
     /// </summary>
     /// <param name="host">应用宿主，提供队列与再广播后的事件。</param>
     /// <param name="pane">目标面板。</param>
-    public DownloadListBinder(AppHost host, Panes.DownloadPane pane)
+    public DownloadListBinder(AppHost host, DownloadPane pane)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _pane = pane ?? throw new ArgumentNullException(nameof(pane));
