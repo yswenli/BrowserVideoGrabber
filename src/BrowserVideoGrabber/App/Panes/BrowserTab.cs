@@ -342,13 +342,14 @@ public sealed class BrowserTab : IDisposable
     }
 
     /// <summary>
-    /// 页面右键菜单弹出前回调：在系统菜单顶部插入「下载视频」自定义项。
+    /// 页面右键菜单弹出前回调：在系统菜单末尾追加「下载视频」自定义项。
     /// </summary>
     /// <param name="sender">事件源（内核对象）。</param>
     /// <param name="e">事件参数，携带即将展示的菜单项集合。</param>
     /// <remarks>
     /// 刻意<b>不</b>把 <c>Handled</c> 置真 —— 系统默认菜单（复制、粘贴、检查元素等）
-    /// 对一款内置浏览器仍有价值，自定义项只是插在最前面。
+    /// 对一款内置浏览器仍有价值；自定义项以分隔线隔开后追加在最后，避免干扰用户
+    /// 对系统菜单的既有肌肉记忆。
     /// </remarks>
     private void OnContextMenuRequested(
         object? sender,
@@ -362,13 +363,21 @@ public sealed class BrowserTab : IDisposable
                 return;
             }
 
+            // 末尾加一条分隔线 + 自定义项，视觉上与系统菜单区分开
+            var separator = core.Environment.CreateContextMenuItem(
+                string.Empty,
+                null!,
+                CoreWebView2ContextMenuItemKind.Separator);
+
             var item = core.Environment.CreateContextMenuItem(
                 "下载视频",
                 null!,
                 CoreWebView2ContextMenuItemKind.Command);
 
             item.CustomItemSelected += (_, _) => VideoScanRequested?.Invoke(this, this);
-            e.MenuItems.Insert(0, item);
+
+            e.MenuItems.Add(separator);
+            e.MenuItems.Add(item);
         }
         catch (InvalidOperationException)
         {
