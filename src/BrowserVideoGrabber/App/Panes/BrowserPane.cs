@@ -1,5 +1,5 @@
 /****************************************************************************
-*Copyright (c) 2026 RiverLand All Rights Reserved.
+*Copyright (c) 2026 yswenli All Rights Reserved.
 *CLR版本： .net10.0
 *机器名称：WALLE
 *公司名称：Walle
@@ -59,7 +59,7 @@ namespace BrowserVideoGrabber.App.Panes;
 /// </remarks>
 public sealed class BrowserPane : UserControl
 {
-    private const string SearchUrlFormat = "https://www.bing.com/search?q={0}";
+    private const string SearchUrlFormat = "https://yandex.com/search/?text={0}&lr=10599";
 
     private readonly ToolStrip _toolStrip = new()
     {

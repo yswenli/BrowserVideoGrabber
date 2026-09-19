@@ -1,5 +1,5 @@
 /****************************************************************************
-*Copyright (c) 2026 RiverLand All Rights Reserved.
+*Copyright (c) 2026 yswenli All Rights Reserved.
 *CLR版本： .net10.0
 *机器名称：WALLE
 *公司名称：Walle
@@ -161,7 +161,7 @@ public sealed class AboutForm : Form
 
         var copyrightLabel = new Label
         {
-            Text = "Copyright © 2026 RiverLand All Rights Reserved.",
+            Text = "Copyright © 2026 yswenli All Rights Reserved.",
             ForeColor = Color.FromArgb(110, 110, 110),
             AutoSize = true,
             Location = new Point(20, 484)

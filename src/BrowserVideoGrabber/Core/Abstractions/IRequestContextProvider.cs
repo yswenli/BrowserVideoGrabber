@@ -1,5 +1,5 @@
 /****************************************************************************
-*Copyright (c) 2026 RiverLand All Rights Reserved.
+*Copyright (c) 2026 yswenli All Rights Reserved.
 *CLR版本： .net10.0
 *机器名称：WALLE
 *公司名称：Walle
