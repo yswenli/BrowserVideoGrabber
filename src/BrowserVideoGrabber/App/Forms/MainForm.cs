@@ -11,7 +11,7 @@
 *创建人： yswenli
 *电子邮箱：yswenli@outlook.com
 *创建时间：2026/9/13 02:52:00
-*描述：主窗体，按「左浏览器 + 右上嗅探 + 右下下载」的三区布局装配全部面板并串联业务动作。
+*描述：主窗体，按「左浏览器 + 右上嗅探 + 右下下载」的三区布局装配全部面板并串联业务动作；并接管系统托盘与最小化到托盘的生命周期。
 *
 *=================================================
 *修改标记
@@ -32,6 +32,7 @@ using BrowserVideoGrabber.App.Formatting;
 using BrowserVideoGrabber.App.Panes;
 using BrowserVideoGrabber.App.Dialogs;
 using BrowserVideoGrabber.Core.Abstractions;
+using BrowserVideoGrabber.Core.Downloads;
 using BrowserVideoGrabber.Core.Models;
 using BrowserVideoGrabber.Infrastructure.Sniffing;
 
@@ -80,7 +81,29 @@ public sealed class MainForm : Form
     /// 界面其余部分（绑定器、嗅探面板）仍只依赖 <see cref="IVideoSniffer"/>。
     /// </remarks>
     private SniffCoordinator? _sniffer;
-    private bool _closingHandled;
+
+    /// <summary>
+    /// 系统托盘图标。
+    /// </summary>
+    /// <remarks>
+    /// 独立于窗体图标：<see cref="AppIcon.Load"/> 每次返回新实例，避免与窗体共享同一 <see cref="Icon"/>
+    /// 在任一侧释放时被连带损坏。窗体隐藏时它仍保留，作为「重新打开 / 设置 / 退出」的入口。
+    /// </remarks>
+    private readonly NotifyIcon _notifyIcon;
+
+    /// <summary>
+    /// 托盘右键菜单（显示界面 / 设置 / 退出）。
+    /// </summary>
+    private readonly ContextMenuStrip _trayMenu;
+
+    /// <summary>托盘「退出」已请求：<see cref="OnFormClosingHandler"/> 据此区分「收起」与「真正退出」。</summary>
+    private bool _trayExitRequested;
+
+    /// <summary>首次数点击 X 收起时是否已弹过气泡提示，避免每次收起都打扰用户。</summary>
+    private bool _trayHintShown;
+
+    /// <summary>退出清理是否已执行，防止 FormClosing 多次触发导致绑定器/嗅探器被重复释放。</summary>
+    private bool _shutdownDone;
 
     /// <summary>
     /// 初始化主窗体。
@@ -99,6 +122,46 @@ public sealed class MainForm : Form
 
         // 统一窗体图标：所有窗口共享 favicon.ico，换图标只改一处（AppIcon.cs）
         Icon = AppIcon.Load();
+
+        // 系统托盘：图标同样取自 favicon.ico（缺失回退窗体图标），作为隐藏后的唯一入口。
+        // 双击图标 = 显示界面；右键菜单提供「显示界面 / 设置 / 退出」三项。
+        // 渲染器换成 TrayMenuRenderer：白色底 + 品牌紫悬浮胶囊，视觉对齐 WorkBuddy 风格。
+        _trayMenu = new ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            ShowCheckMargin = false,
+            Renderer = new TrayMenuRenderer(),
+            Padding = new Padding(4, 6, 4, 6)
+        };
+
+        var showTrayItem = new ToolStripMenuItem("显示界面", CapsuleToolStripRenderer.CreateGlyphIcon("🪟"), (_, _) => ShowFromTray())
+        {
+            Padding = new Padding(6, 4, 6, 4)
+        };
+        var settingsTrayItem = new ToolStripMenuItem("设置", CapsuleToolStripRenderer.CreateGlyphIcon("⚙"), (_, _) => OpenSettingsFromTray())
+        {
+            Padding = new Padding(6, 4, 6, 4)
+        };
+        var exitTrayItem = new ToolStripMenuItem("退出", CapsuleToolStripRenderer.CreateGlyphIcon("⏏"), (_, _) => RequestExit())
+        {
+            Padding = new Padding(6, 4, 6, 4)
+        };
+        _trayMenu.Items.AddRange(
+        [
+            showTrayItem,
+            settingsTrayItem,
+            new ToolStripSeparator(),
+            exitTrayItem
+        ]);
+
+        _notifyIcon = new NotifyIcon
+        {
+            Icon = AppIcon.Load() ?? Icon,
+            Text = "BrowserVideoGrabber · 页面视频嗅探下载器",
+            ContextMenuStrip = _trayMenu,
+            Visible = true
+        };
+        _notifyIcon.DoubleClick += (_, _) => ShowFromTray();
 
         // 刻意不在初始化器里设置 Panel1MinSize / Panel2MinSize：
         // 此刻控件宽度仍是默认的 150，而 WinForms 在设置最小尺寸时会连带校验
@@ -902,66 +965,168 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// 窗体关闭：记忆最后访问的地址、落盘、释放监听资源。
+    /// 窗体关闭：按来源区分「收起」与「真正退出」。
     /// </summary>
     /// <param name="sender">事件源。</param>
     /// <param name="e">事件参数。</param>
+    /// <remarks>
+    /// 三种来源的不同处理：
+    /// <list type="bullet">
+    /// <item><b>非用户主动关闭</b>（系统关机、任务管理器强杀）：必须放行并清理，不能收起——否则进程会卡死。</item>
+    /// <item><b>托盘「退出」</b>：用户明确意图，弹确认后执行完整清理退出。</item>
+    /// <item><b>其余用户主动关闭</b>（点 X / Alt+F4）：不退出，仅收起窗口到托盘，下载在后台继续。</item>
+    /// </list>
+    /// </remarks>
     private void OnFormClosingHandler(object? sender, FormClosingEventArgs e)
     {
-        if (_closingHandled)
+        // 系统关机 / 任务管理器强杀：必须放行，执行完整退出清理（不能收起，否则残留进程）
+        if (e.CloseReason != CloseReason.UserClosing)
+        {
+            PerformShutdown();
+            return;
+        }
+
+        // 托盘「退出」是明确的退出意图：弹确认，确认后清理退出
+        if (_trayExitRequested)
+        {
+            if (!ConfirmExit())
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            PerformShutdown();
+            return;
+        }
+
+        // 其余 UserClosing（点 X / Alt+F4）：不退出，仅收起（下载在后台继续）
+        e.Cancel = true;
+        HideToTray();
+    }
+
+    /// <summary>
+    /// 从托盘恢复窗口：取消隐藏、恢复正常态并置顶激活。
+    /// </summary>
+    /// <remarks>
+    /// 双击托盘图标与右键「显示界面」共用此方法。隐藏（<see cref="Control.Hide"/>）只是
+    /// <see cref="Control.Visible"/> 变 false，窗口句柄与消息循环都还在，因此 <see cref="Show"/>
+    /// 即可复原，无需重建。
+    /// </remarks>
+    private void ShowFromTray()
+    {
+        if (WindowState == FormWindowState.Minimized)
+        {
+            WindowState = FormWindowState.Normal;
+        }
+
+        Show();
+        BringToFront();
+        Activate();
+    }
+
+    /// <summary>
+    /// 收起窗口到托盘，并在首次收起时弹一次气泡提示。
+    /// </summary>
+    private void HideToTray()
+    {
+        Hide();
+
+        if (_trayHintShown)
         {
             return;
         }
 
-        // 任务管理器杀进程或系统关机时不走这条路径，只有用户主动关闭才弹确认
-        if (e.CloseReason == CloseReason.UserClosing)
+        _trayHintShown = true;
+
+        // 仅提示一次：窗口「凭空消失」容易让人以为程序退出了，提示双击可重新打开
+        _notifyIcon.ShowBalloonTip(
+            3000,
+            "已最小化到系统托盘",
+            "程序仍在后台运行，双击托盘图标可重新打开。",
+            ToolTipIcon.Info);
+    }
+
+    /// <summary>
+    /// 从托盘打开设置：先恢复窗口可见，再复用工具栏「设置」逻辑。
+    /// </summary>
+    /// <remarks>
+    /// 先 <see cref="ShowFromTray"/> 是为了让随后的设置对话框有可见的属主窗体，
+    /// 避免「对话框弹在隐藏窗体之上」带来的焦点/层级混乱。
+    /// </remarks>
+    private void OpenSettingsFromTray()
+    {
+        ShowFromTray();
+        OnSettingsClick(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// 托盘「退出」：标记退出意图后关闭窗口，由 <see cref="OnFormClosingHandler"/> 走确认+清理路径。
+    /// </summary>
+    private void RequestExit()
+    {
+        _trayExitRequested = true;
+
+        // 先恢复可见，使退出确认框有正常的属主；用户若取消，窗口保持可见态
+        ShowFromTray();
+        Close();
+    }
+
+    /// <summary>
+    /// 退出确认：有活动下载时提示会中止，否则提示确认退出。
+    /// </summary>
+    /// <returns>用户确认退出返回 <see langword="true"/>。</returns>
+    private bool ConfirmExit()
+    {
+        // 活动下载判定下沉到 ExitGuard，避免此处与未来其它退出入口各写一遍状态枚举
+        if (ExitGuard.HasActiveDownloads(_host.Queue.Tasks.Select(t => t.Status)))
         {
             var runningTasks = _host.Queue.Tasks
                 .Where(t => t.Status is DownloadStatus.Running or DownloadStatus.Pending)
                 .ToList();
 
-            if (runningTasks.Count > 0)
-            {
-                var names = string.Join(Environment.NewLine,
-                    runningTasks.Select(t => $"· {t.Title}（{DisplayText.Status(t.Status)}）"));
+            var names = string.Join(Environment.NewLine,
+                runningTasks.Select(t => $"· {t.Title}（{DisplayText.Status(t.Status)}）"));
 
-                var answer = MessageBox.Show(
-                    this,
-                    $"当前有 {runningTasks.Count} 个任务尚未结束：{Environment.NewLine}{Environment.NewLine}" +
-                    $"{names}{Environment.NewLine}{Environment.NewLine}" +
-                    "确定要退出吗？退出后正在下载的任务将被中止。",
-                    "确认退出",
-                    MessageBoxButtons.OKCancel,
-                    MessageBoxIcon.Warning,
-                    MessageBoxDefaultButton.Button2);
+            var answer = MessageBox.Show(
+                this,
+                $"当前有 {runningTasks.Count} 个任务尚未结束：{Environment.NewLine}{Environment.NewLine}" +
+                $"{names}{Environment.NewLine}{Environment.NewLine}" +
+                "确定要退出吗？退出后正在下载的任务将被中止。",
+                "确认退出",
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
 
-                if (answer != DialogResult.OK)
-                {
-                    e.Cancel = true;
-                    _closingHandled = false;
-                    return;
-                }
-            }
-            else
-            {
-                var answer = MessageBox.Show(
-                    this,
-                    "确定要退出程序吗？",
-                    "确认退出",
-                    MessageBoxButtons.OKCancel,
-                    MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button2);
-
-                if (answer != DialogResult.OK)
-                {
-                    e.Cancel = true;
-                    _closingHandled = false;
-                    return;
-                }
-            }
+            return answer == DialogResult.OK;
         }
 
-        _closingHandled = true;
+        var plain = MessageBox.Show(
+            this,
+            "确定要退出程序吗？",
+            "确认退出",
+            MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2);
+
+        return plain == DialogResult.OK;
+    }
+
+    /// <summary>
+    /// 执行真正的退出清理：记忆最后地址、保存会话、释放绑定器与嗅探器、任务落盘。
+    /// </summary>
+    /// <remarks>
+    /// 只在退出路径调用，收起路径（<see cref="HideToTray"/>）不触碰这些资源——
+    /// 下载队列与绑定器在隐藏期间保持存活，窗口重新显示时界面仍是最新的。
+    /// <see cref="_shutdownDone"/> 防止 FormClosing 多次触发导致重复释放。
+    /// </remarks>
+    private void PerformShutdown()
+    {
+        if (_shutdownDone)
+        {
+            return;
+        }
+
+        _shutdownDone = true;
 
         try
         {
@@ -992,6 +1157,20 @@ public sealed class MainForm : Form
         {
             // 退出路径上的清理异常不应阻止关闭
         }
+    }
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            // 托盘图标不在 Controls 集合中，base.Dispose 不会释放它；必须显式释放，
+            // 否则进程退出后任务栏通知区会残留一个无法点击的图标
+            _notifyIcon?.Dispose();
+            _trayMenu?.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private void InitializeComponent()
