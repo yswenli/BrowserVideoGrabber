@@ -59,6 +59,8 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _restoreTabsBox;
     private readonly NumericUpDown _maxTabsBox;
     private readonly NumericUpDown _maxHistoryBox;
+    private readonly NumericUpDown _segmentRetriesBox;
+    private readonly NumericUpDown _segmentRetryDelayBox;
     private readonly Label _detectionLabel;
 
     /// <summary>
@@ -77,7 +79,7 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(650, 470);
+        ClientSize = new Size(650, 540);
         Font = new Font("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
 
@@ -108,24 +110,30 @@ public sealed class SettingsForm : Form
         _segmentBox = CreateNumeric(154, 1, 16, settings.HttpSegmentCount);
         var segmentHint = CreateHint("MP4 多线程下载的分片数。设为 1 表示单连接下载。", 154);
 
-        _userAgentBox = CreateTextBox(188, settings.UserAgent);
-        var userAgentHint = CreateHint("留空则沿用内置浏览器当前的 User-Agent。", 220);
+        _segmentRetriesBox = CreateNumeric(188, 0, 10, settings.SegmentMaxRetries);
+        var segmentRetriesHint = CreateHint("分片下载失败时的重试次数。", 188);
+
+        _segmentRetryDelayBox = CreateNumeric(222, 1, 60, settings.SegmentRetryDelaySeconds);
+        var segmentRetryDelayHint = CreateHint("每次重试前的等待时间（秒）。", 222);
+
+        _userAgentBox = CreateTextBox(256, settings.UserAgent);
+        var userAgentHint = CreateHint("留空则沿用内置浏览器当前的 User-Agent。", 288);
 
         _restoreTabsBox = new CheckBox
         {
             Left = InputLeft,
-            Top = 252,
+            Top = 320,
             Width = InputWidth,
             Height = 24,
             Text = "启动时恢复上次关闭时的标签页",
             Checked = settings.RestoreTabs
         };
 
-        _maxTabsBox = CreateNumeric(310, 1, 20, settings.MaxTabs);
-        var maxTabsHint = CreateHint("同时打开的标签页上限。每个标签都会占用内存。", 310);
+        _maxTabsBox = CreateNumeric(378, 1, 20, settings.MaxTabs);
+        var maxTabsHint = CreateHint("同时打开的标签页上限。每个标签都会占用内存。", 378);
 
-        _maxHistoryBox = CreateNumeric(344, 50, 5000, settings.MaxHistoryEntries);
-        var maxHistoryHint = CreateHint("历史记录保留条数，超出后淘汰最旧。", 344);
+        _maxHistoryBox = CreateNumeric(412, 50, 5000, settings.MaxHistoryEntries);
+        var maxHistoryHint = CreateHint("历史记录保留条数，超出后淘汰最旧。", 412);
 
         var okButton = new Button
         {
@@ -164,14 +172,20 @@ public sealed class SettingsForm : Form
             CreateLabel("MP4 分片数", 157),
             _segmentBox,
             segmentHint,
-            CreateLabel("User-Agent", 191),
+            CreateLabel("分片重试次数", 191),
+            _segmentRetriesBox,
+            segmentRetriesHint,
+            CreateLabel("分片重试间隔", 225),
+            _segmentRetryDelayBox,
+            segmentRetryDelayHint,
+            CreateLabel("User-Agent", 259),
             _userAgentBox,
             userAgentHint,
             _restoreTabsBox,
-            CreateLabel("标签页上限", 313),
+            CreateLabel("标签页上限", 381),
             _maxTabsBox,
             maxTabsHint,
-            CreateLabel("历史上限", 347),
+            CreateLabel("历史上限", 415),
             _maxHistoryBox,
             maxHistoryHint,
             okButton,
@@ -362,6 +376,8 @@ public sealed class SettingsForm : Form
             OutputDirectory = NullIfEmpty(_outputDirectoryBox.Text),
             MaxConcurrency = (int)_concurrencyBox.Value,
             HttpSegmentCount = (int)_segmentBox.Value,
+            SegmentMaxRetries = (int)_segmentRetriesBox.Value,
+            SegmentRetryDelaySeconds = (int)_segmentRetryDelayBox.Value,
             UserAgent = NullIfEmpty(_userAgentBox.Text),
             RestoreTabs = _restoreTabsBox.Checked,
             MaxTabs = (int)_maxTabsBox.Value,
