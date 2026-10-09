@@ -210,7 +210,9 @@ public sealed class DownloadQueue : IDisposable
             Url = video.Url,
             Format = video.Format,
             OutputPath = outputPath,
-            Title = video.DisplayTitle
+            Title = FileNameBuilder.Build(
+                video.PageTitle,
+                Path.GetFileNameWithoutExtension(video.DisplayTitle))
         });
     }
 

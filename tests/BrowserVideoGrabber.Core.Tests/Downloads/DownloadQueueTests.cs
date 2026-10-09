@@ -411,6 +411,51 @@ public sealed class DownloadQueueTests
     }
 
     /// <summary>
+    /// 由嗅探结果入队时，任务标题应由 FileNameBuilder 生成，与输出文件名一致。
+    /// </summary>
+    [Fact]
+    public void Enqueue_Should_UseFileNameBuilder_ForTitle()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.Zero };
+        using var queue = CreateQueue(handler);
+
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/index.m3u8",
+            NormalizedUrl = "https://cdn.test/hls/index.m3u8",
+            Format = VideoFormat.M3u8,
+            PageTitle = "精彩视频页面标题"
+        };
+
+        var task = queue.Enqueue(video, @"D:\out\video.mp4");
+
+        // FileNameBuilder.Build("精彩视频页面标题", "index") 应返回截断后的页面标题
+        Assert.Equal("精彩视频页面标题", task.Title);
+    }
+
+    /// <summary>
+    /// 由嗅探结果入队时，若 PageTitle 为空，标题应回退到 URL 派生名。
+    /// </summary>
+    [Fact]
+    public void Enqueue_Should_FallBackToUrlName_WhenPageTitleMissing()
+    {
+        var handler = new FakeDownloadHandler { Delay = TimeSpan.Zero };
+        using var queue = CreateQueue(handler);
+
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/movie.mp4",
+            NormalizedUrl = "https://cdn.test/hls/movie.mp4",
+            Format = VideoFormat.Mp4
+        };
+
+        var task = queue.Enqueue(video, @"D:\out\video.mp4");
+
+        // FileNameBuilder.Build(null, "movie") 应返回 "movie"
+        Assert.Equal("movie", task.Title);
+    }
+
+    /// <summary>
     /// 创建带默认配置的下载队列。
     /// </summary>
     /// <param name="handler">下载处理器假实现。</param>
