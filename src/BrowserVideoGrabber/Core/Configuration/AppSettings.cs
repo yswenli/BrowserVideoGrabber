@@ -65,6 +65,12 @@ public sealed class AppSettings
     /// <summary>同时打开的浏览器标签页上限。默认 10。</summary>
     public int MaxTabs { get; set; } = 10;
 
+    /// <summary>分片下载失败时的最大重试次数。默认 3。</summary>
+    public int SegmentMaxRetries { get; set; } = 3;
+
+    /// <summary>分片重试间隔（秒）。默认 5。</summary>
+    public int SegmentRetryDelaySeconds { get; set; } = 5;
+
     /// <summary>
     /// 创建当前设置的深拷贝。
     /// </summary>
@@ -80,6 +86,8 @@ public sealed class AppSettings
             LastUrl = LastUrl,
             RestoreTabs = RestoreTabs,
             MaxHistoryEntries = MaxHistoryEntries,
-            MaxTabs = MaxTabs
+            MaxTabs = MaxTabs,
+            SegmentMaxRetries = SegmentMaxRetries,
+            SegmentRetryDelaySeconds = SegmentRetryDelaySeconds
         };
 }
