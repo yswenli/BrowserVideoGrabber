@@ -214,10 +214,10 @@ public sealed class SniffedVideoTests
     }
 
     /// <summary>
-    /// URL 末段有辨识度时，即使有 PageTitle 也应使用文件名。
+    /// 有 PageTitle 时，始终使用页面标题作为展示名称，URL 文件名仅作回退。
     /// </summary>
     [Fact]
-    public void Should_UseFileName_WhenDistinctive_EvenWithPageTitle()
+    public void Should_AlwaysPreferPageTitle_WhenAvailable()
     {
         var video = new SniffedVideo
         {
@@ -227,7 +227,7 @@ public sealed class SniffedVideoTests
             PageTitle = "页面标题"
         };
 
-        Assert.Equal("movie.mp4", video.DisplayTitle);
+        Assert.Equal("页面标题", video.DisplayTitle);
     }
 
     /// <summary>

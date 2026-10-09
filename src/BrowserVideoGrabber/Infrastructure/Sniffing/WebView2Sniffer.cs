@@ -441,7 +441,8 @@ public sealed class WebView2Sniffer : IVideoSniffer, IDisposable
                     Bandwidth = bandwidth,
                     DurationSeconds = duration,
                     ContentLength = contentLength,
-                    Source = "network"
+                    Source = "network",
+                    PageTitle = CurrentPageTitle()
                 },
                 ownership);
         }

@@ -145,10 +145,15 @@ public sealed class SniffedVideo
     {
         get
         {
+            if (!string.IsNullOrWhiteSpace(PageTitle))
+            {
+                return PageTitle;
+            }
+
             var source = string.IsNullOrWhiteSpace(NormalizedUrl) ? Url : NormalizedUrl;
             if (string.IsNullOrWhiteSpace(source))
             {
-                return string.IsNullOrWhiteSpace(PageTitle) ? string.Empty : PageTitle;
+                return string.Empty;
             }
 
             var slashIndex = source.LastIndexOf('/');
@@ -158,22 +163,10 @@ public sealed class SniffedVideo
 
             if (string.IsNullOrWhiteSpace(tail))
             {
-                return string.IsNullOrWhiteSpace(PageTitle) ? source : PageTitle;
+                return source;
             }
 
-            var qualified = QualifyGenericName(source, tail);
-            if (!string.IsNullOrWhiteSpace(qualified) && qualified != tail)
-            {
-                return qualified;
-            }
-
-            var nameWithoutExtension = Path.GetFileNameWithoutExtension(tail);
-            if (GenericPlaylistNames.Contains(nameWithoutExtension))
-            {
-                return string.IsNullOrWhiteSpace(PageTitle) ? tail : PageTitle;
-            }
-
-            return tail;
+            return QualifyGenericName(source, tail);
         }
     }
 

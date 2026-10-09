@@ -338,10 +338,9 @@ public sealed class HlsSegmentDownloaderTests
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs, maxConcurrency: 1);
         var progressReports = new List<DownloadProgress>();
-        var progress = new Progress<DownloadProgress>(p => progressReports.Add(p));
+        var progress = new SyncProgress<DownloadProgress>(p => progressReports.Add(p));
 
         await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress, CancellationToken.None);
-        await Task.Delay(100);
 
         Assert.Equal(5, progressReports.Count);
         Assert.Equal(1, progressReports[0].CompletedSegments);
@@ -407,12 +406,20 @@ public sealed class HlsSegmentDownloaderTests
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs, maxConcurrency: 4);
         var progressReports = new List<DownloadProgress>();
-        var progress = new Progress<DownloadProgress>(p => progressReports.Add(p));
+        var progress = new SyncProgress<DownloadProgress>(p => progressReports.Add(p));
 
         await downloader.DownloadAsync(BuildPlan(10), new RequestContext(), "C:\\work", progress, CancellationToken.None);
-        await Task.Delay(500);
 
+        Assert.NotEmpty(progressReports);
         Assert.Equal(10, progressReports.Last().CompletedSegments);
         Assert.Equal(10, progressReports.Last().TotalSegments);
+    }
+
+    /// <summary>同步进度收集器，避免 Progress&lt;T&gt; 异步回调在测试中不可靠。</summary>
+    private sealed class SyncProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _callback;
+        public SyncProgress(Action<T> callback) => _callback = callback;
+        public void Report(T value) => _callback(value);
     }
 }
