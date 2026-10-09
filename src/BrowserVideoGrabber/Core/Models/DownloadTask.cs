@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using System.Text.Json.Serialization;
+
 namespace BrowserVideoGrabber.Core.Models;
 
 /// <summary>
@@ -99,6 +101,14 @@ public sealed class DownloadTask
 
     /// <summary>部分成功的说明文字（缺失时段、可用分片占比等）；完整成功时为空。</summary>
     public string? PartialDetail { get; set; }
+
+    /// <summary>已完成的分片数（仅 HLS 分片下载）。运行时状态，不持久化。</summary>
+    [JsonIgnore]
+    public int? CompletedSegments { get; set; }
+
+    /// <summary>总分片数（仅 HLS 分片下载）。运行时状态，不持久化。</summary>
+    [JsonIgnore]
+    public int? TotalSegments { get; set; }
 
     /// <summary>最近一次上报的下载进度（百分比 0~100），仅用于界面展示，不参与持久化决策。</summary>
     public double LastProgressPercent { get; set; }

@@ -57,6 +57,12 @@ public sealed record DownloadProgress
     /// <summary>ffmpeg 链路：处理速度倍率（如 2.1 表示 2.1 倍速）。未知时为 0。</summary>
     public double SpeedMultiplier { get; init; }
 
+    /// <summary>已完成分片数（仅 HLS 分片下载使用）。</summary>
+    public int? CompletedSegments { get; init; }
+
+    /// <summary>总分片数（仅 HLS 分片下载使用）。</summary>
+    public int? TotalSegments { get; init; }
+
     /// <summary>
     /// 构造一个「总量未知」的进度对象，仅携带已处理量。
     /// </summary>
