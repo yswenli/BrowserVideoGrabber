@@ -307,7 +307,14 @@ public sealed class DownloadPane : UserControl
             default:
                 var isPartial = task.IsPartial;
                 BufferedListView.SetSubItemText(item, 1, isPartial ? "部分完成" : DisplayText.Status(task.Status));
-                BufferedListView.SetSubItemText(item, 2, DisplayText.Size(task.OutputBytes));
+                if (task.TotalSegments.HasValue)
+                {
+                    BufferedListView.SetSubItemText(item, 2, $"{task.CompletedSegments ?? 0} / {task.TotalSegments} 片");
+                }
+                else
+                {
+                    BufferedListView.SetSubItemText(item, 2, DisplayText.Size(task.OutputBytes));
+                }
                 BufferedListView.SetSubItemText(item, 3, DisplayText.Time(task.FinishedAt));
                 // 部分成功时「说明」列展示缺失时段，而非输出路径，让用户立刻知道产物不完整
                 BufferedListView.SetSubItemText(item, 4, isPartial ? (task.PartialDetail ?? string.Empty) : ToResultDetail(task));
@@ -325,6 +332,15 @@ public sealed class DownloadPane : UserControl
     /// <param name="progress">最新进度；无则为 null。</param>
     private static void FillRunningColumns(ListViewItem item, DownloadTask task, DownloadProgress? progress)
     {
+        if (progress?.CompletedSegments is { } completed && progress.TotalSegments is { } total)
+        {
+            BufferedListView.SetSubItemText(item, 1, $"{completed} / {total} 片");
+            BufferedListView.SetSubItemText(item, 2, "-");
+            BufferedListView.SetSubItemText(item, 3, $"{completed} / {total} 片");
+            BufferedListView.SetSubItemText(item, 4, task.Url);
+            return;
+        }
+
         var percent = progress?.Percent ?? task.LastProgressPercent;
         var hasTotal = progress?.HasTotal ?? false;
 
