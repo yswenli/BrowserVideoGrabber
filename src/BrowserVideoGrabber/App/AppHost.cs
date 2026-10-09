@@ -494,7 +494,9 @@ public sealed class AppHost : IDisposable
             FfmpegLocator,
             new ProcessRunner(),
             new FfmpegOptions(),
-            fallback: ffmpegHandler);
+            fallback: ffmpegHandler,
+            segmentMaxRetries: Settings.SegmentMaxRetries,
+            segmentRetryDelay: TimeSpan.FromSeconds(Settings.SegmentRetryDelaySeconds));
 
         // 注册顺序：更专用的处理器在前。
         // m3u8 点播由 hlsHandler 接管（直播再转交 ffmpegHandler）；mp4 由 httpHandler 接管；
