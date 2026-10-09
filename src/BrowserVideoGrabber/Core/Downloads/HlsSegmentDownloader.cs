@@ -54,6 +54,8 @@ public sealed class HlsSegmentDownloader
     private readonly IFileSystem _fileSystem;
     private readonly int _maxConcurrency;
 
+    private int _completedSegments;
+
     /// <summary>
     /// 构造下载器。
     /// </summary>
@@ -79,12 +81,14 @@ public sealed class HlsSegmentDownloader
     /// <param name="plan">HLS 下载计划。</param>
     /// <param name="context">请求上下文。</param>
     /// <param name="workDirectory">分片落盘目录。</param>
+    /// <param name="progress">分片进度上报通道，可为 null。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>逐片结局与缺失区间报告。</returns>
     public async Task<HlsSegmentDownloadResult> DownloadAsync(
         HlsDownloadPlan plan,
         RequestContext context,
         string workDirectory,
+        IProgress<DownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
         if (plan is null)
@@ -125,6 +129,11 @@ public sealed class HlsSegmentDownloader
             {
                 serial[i] = await ProcessSegmentAsync(plan, context, workDirectory, key, i, cancellationToken)
                     .ConfigureAwait(false);
+
+                if (serial[i].Status == SegmentStatus.Fetched)
+                {
+                    ReportSegmentProgress(progress, plan.SegmentCount);
+                }
             }
 
             outcomes = serial;
@@ -140,8 +149,15 @@ public sealed class HlsSegmentDownloader
                     await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
                     try
                     {
-                        return await ProcessSegmentAsync(plan, context, workDirectory, key, index, cancellationToken)
+                        var outcome = await ProcessSegmentAsync(plan, context, workDirectory, key, index, cancellationToken)
                             .ConfigureAwait(false);
+
+                        if (outcome.Status == SegmentStatus.Fetched)
+                        {
+                            ReportSegmentProgress(progress, plan.SegmentCount);
+                        }
+
+                        return outcome;
                     }
                     finally
                     {
@@ -157,6 +173,23 @@ public sealed class HlsSegmentDownloader
         var worthKeeping = _validator.IsWorthKeeping(outcomes.Count, outcomes.Count(o => o.Status == SegmentStatus.Fetched));
 
         return new HlsSegmentDownloadResult(outcomes, missingIntervals, worthKeeping);
+    }
+
+    private void ReportSegmentProgress(IProgress<DownloadProgress>? progress, int total)
+    {
+        if (progress is null)
+        {
+            return;
+        }
+
+        var completed = Interlocked.Increment(ref _completedSegments);
+        progress.Report(new DownloadProgress
+        {
+            CompletedSegments = completed,
+            TotalSegments = total,
+            Percent = (double)completed / total * 100,
+            HasTotal = true
+        });
     }
 
     private string? _fatalError;

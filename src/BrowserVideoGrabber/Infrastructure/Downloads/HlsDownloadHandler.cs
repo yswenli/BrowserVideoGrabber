@@ -231,7 +231,7 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         // 3) C# 逐片取片 + 校验 + 解密（每次下载新建下载器与校验器，见类型备注）
         var validator = new SegmentContentValidator();
         var segmentDownloader = new HlsSegmentDownloader(_fetcher, validator, _fileSystem);
-        var report = await segmentDownloader.DownloadAsync(plan, task.Context, workDirectory, cancellationToken).ConfigureAwait(false);
+        var report = await segmentDownloader.DownloadAsync(plan, task.Context, workDirectory, progress, cancellationToken).ConfigureAwait(false);
 
         // 全部失败：要么被 CDN 反爬占位污染，要么地址已失效。回退 ffmpeg 同样拿不到真实分片，直接判定失败
         if (report.FetchedCount == 0)

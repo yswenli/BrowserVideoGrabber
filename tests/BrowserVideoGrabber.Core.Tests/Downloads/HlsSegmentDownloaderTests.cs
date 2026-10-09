@@ -114,7 +114,7 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.Equal(5, report.FetchedCount);
         Assert.Empty(report.MissingIntervals);
@@ -137,7 +137,7 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.Equal(0, report.FetchedCount);
         Assert.False(report.WorthKeeping);
@@ -164,7 +164,7 @@ public sealed class HlsSegmentDownloaderTests
 
         // 串行处理以确定性地验证「首个占位被取回、其余判重复」；并发竞态由 TryClaim 的原子性保证
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs, maxConcurrency: 1);
-        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         // seg0（真实）与 seg1（首个占位）被取回，seg2~4 与 seg1 内容重复被判为占位
         Assert.Equal(2, report.FetchedCount);
@@ -197,7 +197,7 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.Equal(4, report.FetchedCount);
         Assert.Equal(SegmentStatus.FetchFailed, report.Outcomes[2].Status);
@@ -228,7 +228,7 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.Equal(2, report.MissingIntervals.Count);
         Assert.Equal(TimeSpan.FromSeconds(10), report.MissingIntervals[0].Start);
@@ -263,7 +263,7 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(plan, new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(plan, new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.Equal(3, report.FetchedCount);
         Assert.All(report.Outcomes, o =>
@@ -298,7 +298,7 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(plan, new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(plan, new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.Equal(0, report.FetchedCount);
         Assert.All(report.Outcomes, o => Assert.Equal(SegmentStatus.DecryptFailed, o.Status));
@@ -316,10 +316,60 @@ public sealed class HlsSegmentDownloaderTests
 
         var plan = BuildPlan(2, M3u8Encryption.Aes128, keyUri: "https://hls.example/key");
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs);
-        var report = await downloader.DownloadAsync(plan, new RequestContext(), "C:\\work", CancellationToken.None);
+        var report = await downloader.DownloadAsync(plan, new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
 
         Assert.NotNull(report.FatalError);
         Assert.Equal(0, report.FetchedCount);
         Assert.False(report.WorthKeeping);
+    }
+
+    /// <summary>
+    /// 分片下载过程中应上报进度，包含已完成分片数和总分片数。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_Should_ReportSegmentProgress()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        for (var i = 0; i < 5; i++)
+        {
+            fetcher.SeedFile($"https://hls.example/seg{i}.ts", MakeTsSample(i));
+        }
+
+        var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs, maxConcurrency: 1);
+        var progressReports = new List<DownloadProgress>();
+        var progress = new Progress<DownloadProgress>(p => progressReports.Add(p));
+
+        await downloader.DownloadAsync(BuildPlan(5), new RequestContext(), "C:\\work", progress, CancellationToken.None);
+        await Task.Delay(100);
+
+        Assert.Equal(5, progressReports.Count);
+        Assert.Equal(1, progressReports[0].CompletedSegments);
+        Assert.Equal(5, progressReports[0].TotalSegments);
+        Assert.Equal(5, progressReports[4].CompletedSegments);
+    }
+
+    /// <summary>
+    /// 并发模式下进度上报应线程安全，最后一个进度应报告全部完成。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_ConcurrentMode_Should_ReportProgressSafely()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        for (var i = 0; i < 10; i++)
+        {
+            fetcher.SeedFile($"https://hls.example/seg{i}.ts", MakeTsSample(i));
+        }
+
+        var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs, maxConcurrency: 4);
+        var progressReports = new List<DownloadProgress>();
+        var progress = new Progress<DownloadProgress>(p => progressReports.Add(p));
+
+        await downloader.DownloadAsync(BuildPlan(10), new RequestContext(), "C:\\work", progress, CancellationToken.None);
+        await Task.Delay(500);
+
+        Assert.Equal(10, progressReports.Last().CompletedSegments);
+        Assert.Equal(10, progressReports.Last().TotalSegments);
     }
 }
