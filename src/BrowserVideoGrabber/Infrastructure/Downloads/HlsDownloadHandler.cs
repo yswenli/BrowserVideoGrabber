@@ -62,6 +62,8 @@ public sealed class HlsDownloadHandler : IDownloadHandler
     private readonly IProcessRunner _processRunner;
     private readonly FfmpegOptions _options;
     private readonly IDownloadHandler? _fallback;
+    private readonly int _segmentMaxRetries;
+    private readonly TimeSpan _segmentRetryDelay;
 
     /// <summary>
     /// 初始化处理器。
@@ -72,13 +74,17 @@ public sealed class HlsDownloadHandler : IDownloadHandler
     /// <param name="processRunner">进程运行器（用于运行 ffmpeg）。</param>
     /// <param name="options">ffmpeg 调用配置。为空时使用默认配置。</param>
     /// <param name="fallback">直播流回退处理器，通常传入 <c>FfmpegDownloadHandler</c>。为 null 时直播流直接失败。</param>
+    /// <param name="segmentMaxRetries">单分片最大重试次数，默认 3。</param>
+    /// <param name="segmentRetryDelay">重试间隔，默认 5 秒。</param>
     public HlsDownloadHandler(
         IMediaFetcher fetcher,
         IFileSystem fileSystem,
         FfmpegLocator locator,
         IProcessRunner processRunner,
         FfmpegOptions? options = null,
-        IDownloadHandler? fallback = null)
+        IDownloadHandler? fallback = null,
+        int segmentMaxRetries = 3,
+        TimeSpan? segmentRetryDelay = null)
     {
         _fetcher = fetcher ?? throw new ArgumentNullException(nameof(fetcher));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
@@ -86,6 +92,8 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _options = options ?? new FfmpegOptions();
         _fallback = fallback;
+        _segmentMaxRetries = segmentMaxRetries;
+        _segmentRetryDelay = segmentRetryDelay ?? TimeSpan.FromSeconds(5);
     }
 
     /// <inheritdoc />
@@ -230,7 +238,10 @@ public sealed class HlsDownloadHandler : IDownloadHandler
     {
         // 3) C# 逐片取片 + 校验 + 解密（每次下载新建下载器与校验器，见类型备注）
         var validator = new SegmentContentValidator();
-        var segmentDownloader = new HlsSegmentDownloader(_fetcher, validator, _fileSystem);
+        var segmentDownloader = new HlsSegmentDownloader(
+            _fetcher, validator, _fileSystem,
+            segmentMaxRetries: _segmentMaxRetries,
+            segmentRetryDelay: _segmentRetryDelay);
         var report = await segmentDownloader.DownloadAsync(plan, task.Context, workDirectory, progress, cancellationToken).ConfigureAwait(false);
 
         // 全部失败：要么被 CDN 反爬占位污染，要么地址已失效。回退 ffmpeg 同样拿不到真实分片，直接判定失败
