@@ -145,11 +145,10 @@ public sealed class SniffedVideo
     {
         get
         {
-            // 归一化地址可能为空（构造时未赋值），此时直接回退到原始地址
             var source = string.IsNullOrWhiteSpace(NormalizedUrl) ? Url : NormalizedUrl;
             if (string.IsNullOrWhiteSpace(source))
             {
-                return string.Empty;
+                return string.IsNullOrWhiteSpace(PageTitle) ? string.Empty : PageTitle;
             }
 
             var slashIndex = source.LastIndexOf('/');
@@ -159,10 +158,22 @@ public sealed class SniffedVideo
 
             if (string.IsNullOrWhiteSpace(tail))
             {
-                return source;
+                return string.IsNullOrWhiteSpace(PageTitle) ? source : PageTitle;
             }
 
-            return QualifyGenericName(source, tail);
+            var qualified = QualifyGenericName(source, tail);
+            if (!string.IsNullOrWhiteSpace(qualified) && qualified != tail)
+            {
+                return qualified;
+            }
+
+            var nameWithoutExtension = Path.GetFileNameWithoutExtension(tail);
+            if (GenericPlaylistNames.Contains(nameWithoutExtension))
+            {
+                return string.IsNullOrWhiteSpace(PageTitle) ? tail : PageTitle;
+            }
+
+            return tail;
         }
     }
 

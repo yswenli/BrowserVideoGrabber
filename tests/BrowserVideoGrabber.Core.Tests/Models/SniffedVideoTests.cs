@@ -197,6 +197,71 @@ public sealed class SniffedVideoTests
     }
 
     /// <summary>
+    /// URL 末段是通用名（index.m3u8）且有 PageTitle 时，DisplayTitle 应回退到 PageTitle。
+    /// </summary>
+    [Fact]
+    public void Should_FallBackToPageTitle_WhenUrlIsGenericName()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/index.m3u8",
+            NormalizedUrl = "https://cdn.test/hls/index.m3u8",
+            Format = VideoFormat.M3u8,
+            PageTitle = "精彩视频"
+        };
+
+        Assert.Equal("精彩视频", video.DisplayTitle);
+    }
+
+    /// <summary>
+    /// URL 末段有辨识度时，即使有 PageTitle 也应使用文件名。
+    /// </summary>
+    [Fact]
+    public void Should_UseFileName_WhenDistinctive_EvenWithPageTitle()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "https://cdn.test/hls/movie.mp4",
+            NormalizedUrl = "https://cdn.test/hls/movie.mp4",
+            Format = VideoFormat.Mp4,
+            PageTitle = "页面标题"
+        };
+
+        Assert.Equal("movie.mp4", video.DisplayTitle);
+    }
+
+    /// <summary>
+    /// URL 为空且无 PageTitle 时返回空串。
+    /// </summary>
+    [Fact]
+    public void Should_ReturnEmpty_WhenBothUrlAndPageTitleMissing()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "",
+            Format = VideoFormat.M3u8
+        };
+
+        Assert.Equal(string.Empty, video.DisplayTitle);
+    }
+
+    /// <summary>
+    /// URL 为空但有 PageTitle 时返回 PageTitle。
+    /// </summary>
+    [Fact]
+    public void Should_ReturnPageTitle_WhenUrlEmpty()
+    {
+        var video = new SniffedVideo
+        {
+            Url = "",
+            Format = VideoFormat.M3u8,
+            PageTitle = "视频标题"
+        };
+
+        Assert.Equal("视频标题", video.DisplayTitle);
+    }
+
+    /// <summary>
     /// 构造一个嗅探结果。
     /// </summary>
     /// <param name="url">资源地址。</param>
