@@ -693,6 +693,13 @@ public sealed class DownloadQueue : IDisposable
             task.DownloadedBytes = progress.DownloadedBytes;
         }
 
+        // 回写分片进度（HLS 分片下载）
+        if (progress.CompletedSegments.HasValue)
+        {
+            task.CompletedSegments = progress.CompletedSegments;
+            task.TotalSegments = progress.TotalSegments;
+        }
+
         // 进度百分比允许在重试时回退（新一轮从 0 开始），因此这里不做单调性裁剪，
         // 单调性由「同一轮执行内」的处理器保证
         task.LastProgressPercent = progress.Percent;
