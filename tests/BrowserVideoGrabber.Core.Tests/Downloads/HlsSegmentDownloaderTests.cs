@@ -350,6 +350,49 @@ public sealed class HlsSegmentDownloaderTests
     }
 
     /// <summary>
+    /// 分片抓取失败时应重试，重试成功后应标记为 Fetched。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_SegmentRetry_OnFetchFailure()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        fetcher.SeedFileWithFailures("https://hls.example/seg0.ts", MakeTsSample(0), failCount: 2);
+        fetcher.SeedFile("https://hls.example/seg1.ts", MakeTsSample(1));
+
+        var downloader = new HlsSegmentDownloader(
+            fetcher, new SegmentContentValidator(), fs,
+            maxConcurrency: 1, segmentMaxRetries: 3, segmentRetryDelay: TimeSpan.FromMilliseconds(10));
+
+        var report = await downloader.DownloadAsync(BuildPlan(2), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
+
+        Assert.Equal(2, report.FetchedCount);
+        Assert.Equal(3, fetcher.GetCallCount("https://hls.example/seg0.ts"));
+    }
+
+    /// <summary>
+    /// 分片重试次数耗尽后应标记为 FetchFailed。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_SegmentRetryExhausted_Should_Fail()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        fetcher.Fail("https://hls.example/seg0.ts");
+        fetcher.SeedFile("https://hls.example/seg1.ts", MakeTsSample(1));
+
+        var downloader = new HlsSegmentDownloader(
+            fetcher, new SegmentContentValidator(), fs,
+            maxConcurrency: 1, segmentMaxRetries: 2, segmentRetryDelay: TimeSpan.FromMilliseconds(10));
+
+        var report = await downloader.DownloadAsync(BuildPlan(2), new RequestContext(), "C:\\work", progress: null, CancellationToken.None);
+
+        Assert.Equal(1, report.FetchedCount);
+        Assert.Equal(SegmentStatus.FetchFailed, report.Outcomes[0].Status);
+        Assert.Equal(3, fetcher.GetCallCount("https://hls.example/seg0.ts"));
+    }
+
+    /// <summary>
     /// 并发模式下进度上报应线程安全，最后一个进度应报告全部完成。
     /// </summary>
     [Fact]

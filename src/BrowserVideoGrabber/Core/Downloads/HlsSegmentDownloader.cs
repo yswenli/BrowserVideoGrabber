@@ -53,6 +53,8 @@ public sealed class HlsSegmentDownloader
     private readonly SegmentContentValidator _validator;
     private readonly IFileSystem _fileSystem;
     private readonly int _maxConcurrency;
+    private readonly int _segmentMaxRetries;
+    private readonly TimeSpan _segmentRetryDelay;
 
     private int _completedSegments;
 
@@ -63,16 +65,22 @@ public sealed class HlsSegmentDownloader
     /// <param name="validator">分片内容校验器。</param>
     /// <param name="fileSystem">文件系统抽象。</param>
     /// <param name="maxConcurrency">最大并发取片数，默认 8。</param>
+    /// <param name="segmentMaxRetries">单分片最大重试次数，默认 3。</param>
+    /// <param name="segmentRetryDelay">重试间隔，默认 5 秒。</param>
     public HlsSegmentDownloader(
         IMediaFetcher fetcher,
         SegmentContentValidator validator,
         IFileSystem fileSystem,
-        int maxConcurrency = 8)
+        int maxConcurrency = 8,
+        int segmentMaxRetries = 3,
+        TimeSpan? segmentRetryDelay = null)
     {
         _fetcher = fetcher ?? throw new ArgumentNullException(nameof(fetcher));
         _validator = validator ?? throw new ArgumentNullException(nameof(validator));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _maxConcurrency = maxConcurrency > 0 ? maxConcurrency : 8;
+        _segmentMaxRetries = segmentMaxRetries;
+        _segmentRetryDelay = segmentRetryDelay ?? TimeSpan.FromSeconds(5);
     }
 
     /// <summary>
@@ -220,6 +228,30 @@ public sealed class HlsSegmentDownloader
         return keyResult.Bytes;
     }
 
+    private async Task<MediaFetchResult> FetchWithRetryAsync(
+        string uri, RequestContext context, string localPath, CancellationToken ct)
+    {
+        MediaFetchResult? lastResult = null;
+
+        for (var attempt = 0; attempt <= _segmentMaxRetries; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (attempt > 0)
+            {
+                await Task.Delay(_segmentRetryDelay, ct).ConfigureAwait(false);
+            }
+
+            lastResult = await _fetcher.GetToFileAsync(uri, context, localPath, ct).ConfigureAwait(false);
+            if (lastResult.Success)
+            {
+                return lastResult;
+            }
+        }
+
+        return lastResult!;
+    }
+
     /// <summary>
     /// 处理单个分片：抓取 → 校验 → （解密）→ 落盘或判废。
     /// </summary>
@@ -238,7 +270,7 @@ public sealed class HlsSegmentDownloader
         var end = start + TimeSpan.FromSeconds(segment.DurationSeconds);
         var localPath = Path.Combine(workDirectory, $"seg_{index:D5}.ts");
 
-        var fetch = await _fetcher.GetToFileAsync(segment.Uri, context, localPath, ct).ConfigureAwait(false);
+        var fetch = await FetchWithRetryAsync(segment.Uri, context, localPath, ct).ConfigureAwait(false);
         if (!fetch.Success)
         {
             return new SegmentFetchOutcome

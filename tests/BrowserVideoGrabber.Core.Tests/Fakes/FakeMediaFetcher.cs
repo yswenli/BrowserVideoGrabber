@@ -44,6 +44,8 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     private readonly Dictionary<string, (byte[] Content, string ContentType)> _byteAndFile = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _failures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _failureMessages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _callCounts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _failBeforeSucceed = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 构造假抓取器。
@@ -65,6 +67,16 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     /// <summary>预置一个会真正落盘的文件响应（用于分片）。</summary>
     public void SeedFile(string url, byte[] content, string contentType = "video/mp2t")
         => _byteAndFile[url] = (content, contentType);
+
+    /// <summary>预置一个文件响应，但前 failCount 次调用返回失败。</summary>
+    public void SeedFileWithFailures(string url, byte[] content, int failCount, string contentType = "video/mp2t")
+    {
+        _byteAndFile[url] = (content, contentType);
+        _failBeforeSucceed[url] = failCount;
+    }
+
+    /// <summary>获取某 URL 的调用次数。</summary>
+    public int GetCallCount(string url) => _callCounts.TryGetValue(url, out var count) ? count : 0;
 
     /// <summary>标记某 URL 抓取失败。</summary>
     public void Fail(string url) => _failures.Add(url);
@@ -111,6 +123,14 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     /// <inheritdoc />
     public Task<MediaFetchResult> GetToFileAsync(string url, RequestContext context, string destinationPath, CancellationToken cancellationToken)
     {
+        _callCounts.TryGetValue(url, out var callCount);
+        _callCounts[url] = callCount + 1;
+
+        if (_failBeforeSucceed.TryGetValue(url, out var failCount) && callCount < failCount)
+        {
+            return Task.FromResult(MediaFetchResult.Fail($"模拟失败（第 {callCount + 1} 次）"));
+        }
+
         if (_failures.Contains(url))
         {
             return Task.FromResult(Failure(url, $"分片获取失败：{url}"));
