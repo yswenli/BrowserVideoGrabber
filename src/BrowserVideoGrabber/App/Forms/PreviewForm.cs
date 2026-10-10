@@ -36,13 +36,15 @@ namespace BrowserVideoGrabber.App.Forms;
 /// 提供自定义控制栏：进度条、音量控制、播放/暂停按钮。
 /// </para>
 /// <para>
-/// 窗口最大尺寸为 800x450，保持 16:9 比例。
+/// 窗口默认尺寸为 965x560，最小尺寸为 860x500，不限制最大尺寸。
 /// </para>
 /// </remarks>
 public sealed class PreviewForm : Form
 {
-    private const int MaxWidth = 800;
-    private const int MaxHeight = 450;
+    private const int DefaultWidth = 965;
+    private const int DefaultHeight = 560;
+    private const int MinWidth = 860;
+    private const int MinHeight = 500;
 
     private readonly string _videoUrl;
     private readonly string _title;
@@ -68,9 +70,8 @@ public sealed class PreviewForm : Form
     {
         Text = $"预览: {_title}";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(MaxWidth, MaxHeight);
-        MaximumSize = new Size(MaxWidth + 16, MaxHeight + 39); // 加上边框和标题栏
-        MinimumSize = new Size(400, 225);
+        ClientSize = new Size(DefaultWidth, DefaultHeight);
+        MinimumSize = new Size(MinWidth, MinHeight);
         Font = new Font("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
         FormBorderStyle = FormBorderStyle.Sizable;
@@ -182,26 +183,30 @@ public sealed class PreviewForm : Form
         
         #video-container {{
             flex: 1;
+            min-height: 0;
             display: flex;
             align-items: center;
             justify-content: center;
             background: #000;
             position: relative;
+            overflow: hidden;
         }}
         
         #video {{
-            max-width: 100%;
-            max-height: 100%;
-            width: auto;
-            height: auto;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            outline: none;
         }}
         
         #controls {{
+            flex-shrink: 0;
             background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.7));
             padding: 10px 15px;
             display: flex;
             align-items: center;
             gap: 15px;
+            min-height: 44px;
         }}
         
         #progress-container {{
