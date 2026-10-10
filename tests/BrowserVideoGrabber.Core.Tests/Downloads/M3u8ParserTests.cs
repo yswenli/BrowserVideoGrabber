@@ -355,4 +355,53 @@ public sealed class M3u8ParserTests
 
         Assert.False(playlist.IsLive);
     }
+
+    /// <summary>
+    /// 播放列表 URL 含查询参数（如 CDN 鉴权 auth_key）且分片路径为相对路径时，
+    /// 解析后的分片地址必须保留查询参数，否则 CDN 会拒绝请求。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldPreserveBaseQueryParams_WhenSegmentsAreRelative()
+    {
+        const string content = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:10
+            #EXTINF:10.0,
+            seg_000.ts
+            #EXTINF:10.0,
+            seg_001.ts
+            #EXT-X-ENDLIST
+            """;
+
+        var baseWithAuth = new Uri("https://cdn.example.com/hls/video.m3u8?auth_key=abc123&v=3&time=0");
+        var playlist = M3u8Parser.Parse(content, baseWithAuth);
+
+        Assert.Equal(2, playlist.Segments.Count);
+        Assert.Contains("auth_key=abc123", playlist.Segments[0].Uri);
+        Assert.Contains("v=3", playlist.Segments[0].Uri);
+        Assert.Contains("time=0", playlist.Segments[0].Uri);
+        Assert.StartsWith("https://cdn.example.com/hls/seg_000.ts?", playlist.Segments[0].Uri);
+    }
+
+    /// <summary>
+    /// 分片地址本身是绝对地址时，不应强加播放列表的查询参数。
+    /// </summary>
+    [Fact]
+    public void Parse_ShouldNotOverrideQuery_WhenSegmentsAreAbsolute()
+    {
+        const string content = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:10
+            #EXTINF:10.0,
+            https://other.cdn.com/seg_000.ts?token=xyz
+            #EXT-X-ENDLIST
+            """;
+
+        var baseWithAuth = new Uri("https://cdn.example.com/hls/video.m3u8?auth_key=abc123");
+        var playlist = M3u8Parser.Parse(content, baseWithAuth);
+
+        Assert.Single(playlist.Segments);
+        Assert.Equal("https://other.cdn.com/seg_000.ts?token=xyz", playlist.Segments[0].Uri);
+        Assert.DoesNotContain("auth_key", playlist.Segments[0].Uri);
+    }
 }

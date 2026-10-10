@@ -309,6 +309,11 @@ public static class M3u8Parser
     /// <param name="uriText">地址文本，可能是绝对地址也可能是相对路径。</param>
     /// <param name="baseUri">播放列表自身地址，用于解析相对路径。</param>
     /// <returns>绝对地址；无法解析时原样返回输入文本。</returns>
+    /// <remarks>
+    /// 相对路径解析时保留 base URI 的查询参数（如 <c>?auth_key=...</c>），
+    /// 因为 CDN 鉴权参数通常挂在播放列表 URL 上，而播放列表内的分片路径往往是相对的。
+    /// .NET 的 <see cref="Uri(Uri, string)"/> 默认会丢弃 base 的查询参数，此处手动补回。
+    /// </remarks>
     private static string ResolveUri(string uriText, Uri? baseUri)
     {
         if (Uri.TryCreate(uriText, UriKind.Absolute, out var absoluteUri))
@@ -318,6 +323,17 @@ public static class M3u8Parser
 
         if (baseUri is not null && Uri.TryCreate(baseUri, uriText, out var combinedUri))
         {
+            // .NET Uri 解析相对路径时会丢弃 base 的 Query，需要手动补回
+            if (string.IsNullOrEmpty(combinedUri.Query)
+                && !string.IsNullOrEmpty(baseUri.Query))
+            {
+                var builder = new UriBuilder(combinedUri)
+                {
+                    Query = baseUri.Query
+                };
+                return builder.Uri.ToString();
+            }
+
             return combinedUri.ToString();
         }
 
