@@ -19,8 +19,12 @@
 | 能力 | 说明 |
 |---|---|
 | 🕵️ 页面视频嗅探 | 网络响应监听 + URL 特征匹配 + JS Hook 注入三管齐下，直链、动态地址、MSE 分片都能抓 |
+| 🏷️ 智能标题显示 | 嗅探列表和下载列表优先显示页面标题，无标题时回退到视频文件名 |
+| 📊 分片进度实时显示 | HLS 下载时实时显示 "X / Y 片" 格式进度，一目了然 |
+| 🔄 分片失败自动重试 | 单个分片下载失败时自动重试，重试次数和间隔可配置，提高下载成功率 |
 | 🧩 一视频一记录 | 同一个视频的主清单、各档清晰度变体、上千个分片会**自动归并成一行** —— 看起来干净清爽，下载拿到的是完整文件 |
 | 📦 多格式下载 | `m3u8` / `ts` / `m4s` / `mpd`（DASH）走 ffmpeg；`mp4` 走原生 HTTP 多线程分片下载，速度飞起 |
+| 🎞️ fMP4 分片支持 | 自动识别并下载 fMP4 格式分片（含 init 段），兼容更多流媒体站点 |
 | ⏸️ 断点续传 | MP4 采用 `.partN` 分片，中断后重试只补齐缺失部分，不会从头再来 |
 | 🍪 登录态复用 | 自动从内嵌浏览器导出 Referer / UA / Cookie —— 需登录才能看的视频也能下载 |
 | 📑 多标签浏览 | `<a target="_blank">` 不会弹独立窗口，而是**新开一个标签页**，共享会话、登录态、收藏夹 |
@@ -87,7 +91,7 @@ choco install ffmpeg
 # 还原并构建（单项目，已合并）
 dotnet build src/BrowserVideoGrabber/BrowserVideoGrabber.csproj -c Release
 
-# 运行单元测试（265 个用例，覆盖 Core 与 Infrastructure 两层）
+# 运行单元测试（283 个用例，覆盖 Core 与 Infrastructure 两层）
 dotnet test tests/BrowserVideoGrabber.Core.Tests/
 
 # 启动
@@ -142,6 +146,8 @@ dotnet test tests/BrowserVideoGrabber.Core.Tests/
 | 输出目录 | 下载文件默认存 `%USERPROFILE%\Downloads` |
 | 并发下载数 | 默认 3；过高可能触发站点限流 |
 | MP4 分片数 | 默认 4；设为 1 = 单连接 |
+| 分片重试次数 | 默认 3；HLS 分片下载失败时的重试次数 |
+| 分片重试间隔 | 默认 5 秒；每次重试前的等待时间 |
 | User-Agent | 留空则跟内嵌浏览器当前 UA 一致 |
 | 启动时自动嗅探 | 关闭后启动不自动嗅探，可随时手动开 |
 
@@ -163,7 +169,7 @@ dotnet test tests/BrowserVideoGrabber.Core.Tests/
 
 ## 🧪 手工冒烟清单（26 项）
 
-265 个单元测试覆盖嗅探匹配、m3u8 解析、ffmpeg 参数与进度、下载队列、分片续传等纯逻辑层。**界面与真实网站交互行为需要人工确认**，建议按此清单跑一遍：
+283 个单元测试覆盖嗅探匹配、m3u8 解析、ffmpeg 参数与进度、下载队列、分片续传等纯逻辑层。**界面与真实网站交互行为需要人工确认**，建议按此清单跑一遍：
 
 | # | 用例 | 预期 |
 |---|---|---|
@@ -230,7 +236,8 @@ src/BrowserVideoGrabber/
     ├── Sniffing/WebView2Sniffer.cs  # 三条嗅探链路协调
     ├── Sniffing/JsHookInjector.cs   # 注入 JS 捕获动态地址
     ├── Downloads/HttpDownloadHandler.cs    # MP4 多线程分片
-    ├── Downloads/FfmpegDownloadHandler.cs  # m3u8 / mpd
+    ├── Downloads/HlsDownloadHandler.cs     # HLS 原生分片下载（C# 取片 + ffmpeg 封装）
+    ├── Downloads/FfmpegDownloadHandler.cs  # m3u8 / mpd 兜底
     ├── Ffmpeg/FfmpegLocator.cs              # ffmpeg 自动探测
     ├── Security/CookieExporter.cs           # 从 WebView2 导出 Cookie / UA / Referer
     ├── Execution/ProcessRunner.cs           # ffmpeg 进程管理
