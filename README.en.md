@@ -1,6 +1,6 @@
 # 🎬 BrowserVideoGrabber
 
-> Browsing videos online but left with nothing to show for it? **BrowserVideoGrabber** makes it dead simple. Built-in browser opens any page, video resources auto-populate the sniff list, double-click to download. Too many tabs? Open more with a single click. Love a page? Tap ⭐ and save it for later.
+> Browsing videos online but left with nothing to show for it? **BrowserVideoGrabber** makes it dead simple. Built-in browser opens any page, video resources auto-populate the sniff list, double-click to preview or download. Too many tabs? Open more with a single click. Love a page? Tap ⭐ and save it for later.
 
 <p align="center">
   <em>Built with ❤️ — .NET 10 · Windows Forms · WebView2 (Edge Chromium)</em>
@@ -125,7 +125,7 @@ dotnet test tests/BrowserVideoGrabber.Core.Tests/
 1. Launch the app, type a URL in the address bar (or just keywords — auto-Bing search kicks in)
 2. **Log in if the site requires it** (critical! Session cookies are reused for download requests)
 3. Play a video. Wait a few seconds — resources pop up in the sniff panel on the right 👀
-4. **Double-click** any entry → added to download; or right-click and pick "Add to download"
+4. **Double-click** any entry → preview; right-click and pick "Add to download" to queue it
 5. Switch to "Running" at bottom-right to watch progress; double-click "Done" entries to open the file directly
 
 ### Pro tips
@@ -137,7 +137,7 @@ dotnet test tests/BrowserVideoGrabber.Core.Tests/
 | Reset and re-sniff | Right-click the sniff panel → "Clear list", then refresh and replay the video |
 | Resume a broken download | Click "Resume" — MP4 picks up from the last successfully downloaded segment |
 | ffmpeg not found? | Check the status bar → open Settings → auto-detect or specify manually |
-| Want to preview a video first? | Right-click the sniff list → "Preview" to quickly watch with built-in player (supports m3u8 and mp4) |
+| Want to preview a video first? | Double-click a sniff list entry (or right-click → "Preview") to quickly watch with built-in player (supports m3u8 and mp4) |
 | Can't tell videos apart on the same page? | Each video name has a 6-character hex suffix (URL hash) for easy identification |
 
 ### Settings at a glance
@@ -180,7 +180,7 @@ There's an "Open app data folder" button in the toolbar that jumps right there.
 | 5 | Back / Forward buttons | Auto-disabled when no history available |
 | 6 | Play a page with MP4 direct links | MP4 entry appears at top-right, source shows "Network" or "Script" |
 | 7 | Play an HLS (m3u8) page | **Exactly one row per video** (playlist + quality variants + thousands of TS segments auto-merge) |
-| 8 | Double-click an MP4 sniff result | Progress bar advances to 100%, file appears in output directory |
+| 8 | Double-click an MP4 sniff result | Built-in player opens for preview; right-click "Add to download" to queue, progress reaches 100% and file appears in output directory |
 | 9 | Pause mid-download | Task moves to "Pending — Paused", network traffic stops |
 | 10 | Resume | Download picks up and completes |
 | 11 | Download an m3u8 task | ffmpeg spawned, progress advances by timestamp, output is a playable mp4 |

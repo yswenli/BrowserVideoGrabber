@@ -328,8 +328,8 @@ public sealed class SniffPane : UserControl
     /// <summary>刷新计数标签。</summary>
     private void UpdateCount() => _countLabel.Text = $"共 {_itemsById.Count} 条";
 
-    /// <summary>列表双击：直接加入下载。</summary>
-    private void OnListDoubleClick(object? sender, EventArgs e) => RequestDownloadOfSelected();
+    /// <summary>列表双击：试看内容。</summary>
+    private void OnListDoubleClick(object? sender, EventArgs e) => RequestPreviewOfSelected();
 
     /// <summary>列表右键：弹出菜单。</summary>
     private void OnListMouseUp(object? sender, MouseEventArgs e)
