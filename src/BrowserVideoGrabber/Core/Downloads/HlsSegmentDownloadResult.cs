@@ -94,17 +94,22 @@ public sealed class HlsSegmentDownloadResult
     /// <summary>致命错误（如密钥无法获取）。存在时整批下载应回退 ffmpeg。</summary>
     public string? FatalError { get; }
 
+    /// <summary>fMP4 初始化段的本地路径。非 fMP4 播放列表时为 null。</summary>
+    public string? InitSegmentPath { get; }
+
     /// <summary>构造报告。</summary>
     public HlsSegmentDownloadResult(
         IReadOnlyList<SegmentFetchOutcome> outcomes,
         IReadOnlyList<(TimeSpan Start, TimeSpan End)> missingIntervals,
         bool worthKeeping,
-        string? fatalError = null)
+        string? fatalError = null,
+        string? initSegmentPath = null)
     {
         Outcomes = outcomes;
         MissingIntervals = missingIntervals;
         WorthKeeping = worthKeeping;
         FatalError = fatalError;
+        InitSegmentPath = initSegmentPath;
     }
 
     /// <summary>分片总数。</summary>
@@ -130,12 +135,19 @@ public sealed class HlsSegmentDownloadResult
         return count;
     }
 
-    /// <summary>成功分片的本地路径，按播放顺序排列，供拼接器直接消费。</summary>
+    /// <summary>成功分片的本地路径，按播放顺序排列，供拼接器直接消费。fMP4 播放列表会在最前面包含 init 段。</summary>
     public IReadOnlyList<string> FetchedFilePaths
     {
         get
         {
-            var paths = new List<string>(Outcomes.Count);
+            var paths = new List<string>(Outcomes.Count + (InitSegmentPath is not null ? 1 : 0));
+            
+            // fMP4 播放列表：init 段必须在最前面
+            if (InitSegmentPath is not null)
+            {
+                paths.Add(InitSegmentPath);
+            }
+            
             foreach (var outcome in Outcomes)
             {
                 if (outcome.Status == SegmentStatus.Fetched && outcome.FilePath is not null)

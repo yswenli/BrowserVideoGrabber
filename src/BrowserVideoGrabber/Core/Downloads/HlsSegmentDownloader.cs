@@ -180,7 +180,23 @@ public sealed class HlsSegmentDownloader
         var missingIntervals = BuildMissingIntervals(plan, outcomes);
         var worthKeeping = _validator.IsWorthKeeping(outcomes.Count, outcomes.Count(o => o.Status == SegmentStatus.Fetched));
 
-        return new HlsSegmentDownloadResult(outcomes, missingIntervals, worthKeeping);
+        // fMP4 播放列表：下载 init 段
+        string? initSegmentPath = null;
+        if (!string.IsNullOrEmpty(plan.InitSegmentUri))
+        {
+            initSegmentPath = Path.Combine(workDirectory, "init.mp4");
+            var initFetch = await FetchWithRetryAsync(plan.InitSegmentUri, context, initSegmentPath, cancellationToken).ConfigureAwait(false);
+            if (!initFetch.Success)
+            {
+                // init 段下载失败，清理并返回失败
+                _fileSystem.DeleteFile(initSegmentPath);
+                return new HlsSegmentDownloadResult(
+                    outcomes, missingIntervals, false,
+                    $"初始化段下载失败：{initFetch.Error}");
+            }
+        }
+
+        return new HlsSegmentDownloadResult(outcomes, missingIntervals, worthKeeping, initSegmentPath: initSegmentPath);
     }
 
     private void ReportSegmentProgress(IProgress<DownloadProgress>? progress, int total)
@@ -285,7 +301,8 @@ public sealed class HlsSegmentDownloader
         }
 
         // 加密流在解密前字节是随机的，不能按 TS 同步字判定；解密后再做同步字复检
-        var expectSyncByte = plan.Encryption != M3u8Encryption.Aes128;
+        // fMP4 分片（有 init 段）首字节不是 0x47，不检查 TS 同步字
+        var expectSyncByte = plan.Encryption != M3u8Encryption.Aes128 && string.IsNullOrEmpty(plan.InitSegmentUri);
         var head = ReadHead(localPath, HeadSampleBytes);
         var tail = ReadTail(localPath, HeadSampleBytes);
         var verdict = _validator.Inspect(fetch.ContentType, fetch.Length, head, expectSyncByte);
