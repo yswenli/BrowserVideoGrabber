@@ -21,7 +21,7 @@
 | 🕵️ In-page video sniffing | Three-layer detection: network response listening + URL signature matching + JS hook injection — catches direct links, dynamic URLs, and MSE fragments |
 | 🏷️ Smart title display | Sniff list and download list prioritize page titles, falling back to video filenames when unavailable |
 | 🔖 Unique identifier suffix | Each video name has a 6-character hex suffix (URL hash) to distinguish multiple videos on the same page |
-| 👁️ Preview content | Right-click "Preview" in sniff list to quickly preview videos with ffplay (requires ffmpeg suite) |
+| 👁️ Preview content | Right-click "Preview" in sniff list to quickly watch videos with built-in HTML5 player (supports m3u8 and mp4) |
 | 🧩 One video, one row | Playlists, quality variants, and thousands of TS segments all **collapse into a single row** — clean UI, full-file download |
 | 📦 Multi-format download | `m3u8` / `ts` / `m4s` / `mpd` (DASH) → ffmpeg; `mp4` → native HTTP multi-threaded segmented download for speed |
 | 🎞️ fMP4 segment support | Automatically detects and downloads fMP4 format segments (including init segment), compatible with more streaming sites |
@@ -137,7 +137,7 @@ dotnet test tests/BrowserVideoGrabber.Core.Tests/
 | Reset and re-sniff | Right-click the sniff panel → "Clear list", then refresh and replay the video |
 | Resume a broken download | Click "Resume" — MP4 picks up from the last successfully downloaded segment |
 | ffmpeg not found? | Check the status bar → open Settings → auto-detect or specify manually |
-| Want to preview a video first? | Right-click the sniff list → "Preview" to quickly watch with ffplay (requires ffmpeg suite) |
+| Want to preview a video first? | Right-click the sniff list → "Preview" to quickly watch with built-in player (supports m3u8 and mp4) |
 | Can't tell videos apart on the same page? | Each video name has a 6-character hex suffix (URL hash) for easy identification |
 
 ### Settings at a glance

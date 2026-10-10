@@ -659,25 +659,8 @@ public sealed class MainForm : Form
     {
         try
         {
-            var ffplayPath = _host.LocateFfplay();
-
-            if (string.IsNullOrWhiteSpace(ffplayPath))
-            {
-                // ffplay 不可用，降级到系统默认播放器
-                TryOpenWithSystemPlayer(video);
-                return;
-            }
-
-            // 直接启动 ffplay 独立窗口
-            var arguments = BuildFfplayArguments(video);
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = ffplayPath,
-                Arguments = arguments,
-                UseShellExecute = false
-            };
-
-            Process.Start(startInfo);
+            var previewForm = new PreviewForm(video.Url, video.DisplayTitle);
+            previewForm.Show(this);
             SetStatus($"正在预览：{video.DisplayTitle}");
         }
         catch (Exception exception)
@@ -687,66 +670,6 @@ public sealed class MainForm : Form
                 this,
                 $"预览失败：{exception.Message}",
                 "预览",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
-    }
-
-    /// <summary>
-    /// 构建 ffplay 命令行参数。
-    /// </summary>
-    /// <param name="video">嗅探结果。</param>
-    /// <returns>命令行参数字符串。</returns>
-    private static string BuildFfplayArguments(SniffedVideo video)
-    {
-        var title = EscapeCommandLineArg(video.DisplayTitle);
-        var url = EscapeCommandLineArg(video.Url);
-        return $"-window_title {title} -autoexit -infbuf {url}";
-    }
-
-    /// <summary>
-    /// 转义命令行参数。
-    /// </summary>
-    /// <param name="arg">原始参数。</param>
-    /// <returns>转义后的参数。</returns>
-    private static string EscapeCommandLineArg(string arg)
-    {
-        if (string.IsNullOrEmpty(arg))
-        {
-            return "\"\"";
-        }
-
-        if (arg.Contains(' ') || arg.Contains('"') || arg.Contains('&') || arg.Contains('|'))
-        {
-            return "\"" + arg.Replace("\"", "\\\"") + "\"";
-        }
-
-        return arg;
-    }
-
-    /// <summary>
-    /// 使用系统默认播放器打开视频。
-    /// </summary>
-    /// <param name="video">嗅探结果。</param>
-    private void TryOpenWithSystemPlayer(SniffedVideo video)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = video.Url,
-                UseShellExecute = true
-            });
-            SetStatus($"正在使用系统播放器打开：{video.DisplayTitle}");
-        }
-        catch (Exception exception)
-        {
-            SetStatus($"打开失败：{exception.Message}");
-            MessageBox.Show(
-                this,
-                $"无法打开视频：{exception.Message}\n\n" +
-                "请确保已安装 ffplay 或系统已关联视频播放器。",
-                "预览失败",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
