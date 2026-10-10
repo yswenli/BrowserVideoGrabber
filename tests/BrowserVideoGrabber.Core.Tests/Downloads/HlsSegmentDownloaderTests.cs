@@ -405,14 +405,14 @@ public sealed class HlsSegmentDownloaderTests
         }
 
         var downloader = new HlsSegmentDownloader(fetcher, new SegmentContentValidator(), fs, maxConcurrency: 4);
-        var progressReports = new List<DownloadProgress>();
+        var progressReports = new System.Collections.Concurrent.ConcurrentBag<DownloadProgress>();
         var progress = new SyncProgress<DownloadProgress>(p => progressReports.Add(p));
 
         await downloader.DownloadAsync(BuildPlan(10), new RequestContext(), "C:\\work", progress, CancellationToken.None);
 
         Assert.NotEmpty(progressReports);
-        Assert.Equal(10, progressReports.Last().CompletedSegments);
-        Assert.Equal(10, progressReports.Last().TotalSegments);
+        Assert.Equal(10, progressReports.Max(p => p.CompletedSegments));
+        Assert.All(progressReports, p => Assert.Equal(10, p.TotalSegments));
     }
 
     /// <summary>同步进度收集器，避免 Progress&lt;T&gt; 异步回调在测试中不可靠。</summary>

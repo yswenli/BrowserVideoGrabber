@@ -113,6 +113,9 @@ public sealed class SniffPane : UserControl
     /// <summary>请求把某个资源加入下载队列。</summary>
     public event EventHandler<SniffedVideo>? DownloadRequested;
 
+    /// <summary>请求预览播放某个视频资源。</summary>
+    public event EventHandler<SniffedVideo>? PreviewRequested;
+
     /// <summary>
     /// 请求清空嗅探器内部的去重记录。
     /// </summary>
@@ -210,6 +213,9 @@ public sealed class SniffPane : UserControl
     {
         var menu = new ContextMenuStrip();
 
+        var previewItem = new ToolStripMenuItem("试看内容(&P)");
+        previewItem.Click += (_, _) => RequestPreviewOfSelected();
+
         var downloadItem = new ToolStripMenuItem("加入下载(&D)");
         downloadItem.Click += (_, _) => RequestDownloadOfSelected();
 
@@ -219,7 +225,7 @@ public sealed class SniffPane : UserControl
         var removeItem = new ToolStripMenuItem("从列表移除(&R)");
         removeItem.Click += (_, _) => RemoveSelected();
 
-        menu.Items.AddRange([downloadItem, copyItem, new ToolStripSeparator(), removeItem]);
+        menu.Items.AddRange([previewItem, downloadItem, new ToolStripSeparator(), copyItem, new ToolStripSeparator(), removeItem]);
         return menu;
     }
 
@@ -251,10 +257,39 @@ public sealed class SniffPane : UserControl
     /// </summary>
     /// <param name="video">嗅探结果。</param>
     /// <returns>展示名称。</returns>
+    /// <remarks>
+    /// 名称格式为「标题_6位hex」，其中 6 位 hex 是 URL 的 SHA-256 前 3 字节，
+    /// 用于区分同一页面中多个视频（它们可能有相同的页面标题）。
+    /// </remarks>
     private static string ToDisplayName(SniffedVideo video)
     {
         var title = video.DisplayTitle;
-        return string.IsNullOrWhiteSpace(title) ? "（未命名）" : title;
+        var suffix = GetUrlSuffix(video.Url);
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return $"（未命名）_{suffix}";
+        }
+
+        return $"{title}_{suffix}";
+    }
+
+    /// <summary>
+    /// 从 URL 生成 6 位 hex 后缀。
+    /// </summary>
+    /// <param name="url">视频 URL。</param>
+    /// <returns>6 位 hex 字符串。</returns>
+    private static string GetUrlSuffix(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return "000000";
+        }
+
+        // 使用 URL 的哈希值生成 6 位 hex（取前 3 字节 = 6 个 hex 字符）
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(url));
+        return $"{hash[0]:x2}{hash[1]:x2}{hash[2]:x2}";
     }
 
     /// <summary>
@@ -324,6 +359,18 @@ public sealed class SniffPane : UserControl
         }
 
         DownloadRequested?.Invoke(this, video);
+    }
+
+    /// <summary>对当前选中项发起预览请求。</summary>
+    private void RequestPreviewOfSelected()
+    {
+        if (_listView.SelectedItems.Count == 0
+            || _listView.SelectedItems[0].Tag is not SniffedVideo video)
+        {
+            return;
+        }
+
+        PreviewRequested?.Invoke(this, video);
     }
 
     /// <summary>复制当前选中项的地址。</summary>

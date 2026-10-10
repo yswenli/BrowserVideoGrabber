@@ -52,12 +52,16 @@ public sealed class FfmpegLocator
     /// <summary>可执行文件名。Windows 平台固定为 ffmpeg.exe。</summary>
     private const string ExecutableName = "ffmpeg.exe";
 
+    /// <summary>ffplay 可执行文件名。Windows 平台固定为 ffplay.exe。</summary>
+    private const string FfplayExecutableName = "ffplay.exe";
+
     private readonly IFileSystem _fileSystem;
     private readonly string? _configuredPath;
     private readonly string? _appDirectory;
     private readonly bool _enableEnvironmentSearch;
 
     private string? _cachedPath;
+    private string? _cachedFfplayPath;
 
     /// <summary>
     /// 初始化定位器。
@@ -116,9 +120,50 @@ public sealed class FfmpegLocator
     public bool IsAvailable() => Locate() is not null;
 
     /// <summary>
+    /// 定位 ffplay 可执行文件。
+    /// </summary>
+    /// <returns>ffplay 的完整路径；全部候选均不存在时返回 null。</returns>
+    /// <remarks>
+    /// 探测顺序：ffmpeg 同目录 → 应用目录 → 系统 PATH → 常见安装位置。
+    /// </remarks>
+    public string? LocateFfplay()
+    {
+        if (_cachedFfplayPath is not null)
+        {
+            return _cachedFfplayPath;
+        }
+
+        foreach (var candidate in GetFfplayCandidatePaths())
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            if (_fileSystem.FileExists(candidate))
+            {
+                _cachedFfplayPath = candidate;
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 判断本机是否可用 ffplay。
+    /// </summary>
+    /// <returns>可用返回 true。</returns>
+    public bool IsFfplayAvailable() => LocateFfplay() is not null;
+
+    /// <summary>
     /// 清除探测缓存，强制下次重新探测。用户修改设置后必须调用。
     /// </summary>
-    public void ClearCache() => _cachedPath = null;
+    public void ClearCache()
+    {
+        _cachedPath = null;
+        _cachedFfplayPath = null;
+    }
 
     /// <summary>
     /// 按优先级枚举全部候选路径。
@@ -165,5 +210,62 @@ public sealed class FfmpegLocator
 
         yield return @"C:\ProgramData\chocolatey\bin\" + ExecutableName;
         yield return @"C:\ffmpeg\bin\" + ExecutableName;
+    }
+
+    /// <summary>
+    /// 按优先级枚举 ffplay 全部候选路径。
+    /// </summary>
+    /// <returns>候选路径序列（可能包含空项，由调用方跳过）。</returns>
+    /// <remarks>
+    /// ffplay 通常与 ffmpeg 在同一目录，因此优先从 ffmpeg 所在目录探测。
+    /// </remarks>
+    public IEnumerable<string> GetFfplayCandidatePaths()
+    {
+        // 1) ffmpeg 同目录（最常见情况）
+        var ffmpegPath = Locate();
+        if (!string.IsNullOrWhiteSpace(ffmpegPath))
+        {
+            var ffmpegDir = Path.GetDirectoryName(ffmpegPath);
+            if (!string.IsNullOrWhiteSpace(ffmpegDir))
+            {
+                yield return Path.Combine(ffmpegDir, FfplayExecutableName);
+            }
+        }
+
+        // 2) 应用目录内的随包位置
+        if (!string.IsNullOrWhiteSpace(_appDirectory))
+        {
+            yield return Path.Combine(_appDirectory, "tools", "ffmpeg", FfplayExecutableName);
+            yield return Path.Combine(_appDirectory, FfplayExecutableName);
+        }
+
+        if (!_enableEnvironmentSearch)
+        {
+            yield break;
+        }
+
+        // 3) 系统 PATH
+        var pathVariable = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(pathVariable))
+        {
+            foreach (var directory in pathVariable.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = directory.Trim().Trim('"');
+                if (trimmed.Length > 0)
+                {
+                    yield return Path.Combine(trimmed, FfplayExecutableName);
+                }
+            }
+        }
+
+        // 4) 常见包管理器与手动安装位置
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            yield return Path.Combine(userProfile, "scoop", "shims", FfplayExecutableName);
+        }
+
+        yield return @"C:\ProgramData\chocolatey\bin\" + FfplayExecutableName;
+        yield return @"C:\ffmpeg\bin\" + FfplayExecutableName;
     }
 }

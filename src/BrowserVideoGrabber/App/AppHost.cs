@@ -303,6 +303,18 @@ public sealed class AppHost : IDisposable
     public bool IsFfmpegAvailable() => FfmpegLocator.IsAvailable();
 
     /// <summary>
+    /// 定位 ffplay 可执行文件。
+    /// </summary>
+    /// <returns>ffplay 的完整路径；未找到返回 null。</returns>
+    public string? LocateFfplay() => FfmpegLocator.LocateFfplay();
+
+    /// <summary>
+    /// 当前 ffplay 是否可用。
+    /// </summary>
+    /// <returns>可用返回 true。</returns>
+    public bool IsFfplayAvailable() => FfmpegLocator.IsFfplayAvailable();
+
+    /// <summary>
     /// 为嗅探到的资源生成输出文件路径。
     /// </summary>
     /// <param name="video">嗅探结果。</param>
