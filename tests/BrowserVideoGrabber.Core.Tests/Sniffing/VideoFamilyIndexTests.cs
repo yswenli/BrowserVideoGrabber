@@ -391,6 +391,65 @@ public sealed class VideoFamilyIndexTests
     }
 
     /// <summary>
+    /// 不同视频仅靠 query 中的身份参数区分（id / vid 等）时必须各自成行，
+    /// 绝不能被「重新签名」逻辑合并成一行互相替换。
+    /// </summary>
+    /// <remarks>
+    /// 这是真实故障：大量 CMS 的视频地址形如 <c>play?id=123&amp;sign=abc</c>，
+    /// 不同视频路径相同、仅 query 不同。旧指纹丢弃整个 query，
+    /// 两条地址碰撞到同一家族后被当作续签，新页面的视频原地覆盖旧页面的行。
+    /// </remarks>
+    [Fact]
+    public void Should_KeepSeparateFamilies_WhenVideosDifferOnlyByIdentityQuery()
+    {
+        var index = new VideoFamilyIndex();
+
+        var first = index.Consider(Create("https://cdn.test/play?id=111&sign=aaa", VideoFormat.M3u8));
+        var second = index.Consider(Create("https://cdn.test/play?id=222&sign=bbb", VideoFormat.M3u8));
+
+        Assert.Equal(VideoAdmissionKind.New, first.Kind);
+        Assert.Equal(VideoAdmissionKind.New, second.Kind);
+        Assert.NotEqual(first.Video.Id, second.Video.Id);
+        Assert.Equal(2, index.FamilyCount);
+    }
+
+    /// <summary>
+    /// 同一视频带身份参数续签后仍须原地刷新为最新地址。
+    /// </summary>
+    [Fact]
+    public void Should_RefreshToLatestSignature_WhenIdentityParamPresent()
+    {
+        var index = new VideoFamilyIndex();
+
+        var stale = "https://cdn.test/play?id=111&sign=OLD";
+        var fresh = "https://cdn.test/play?id=111&sign=NEW";
+
+        var first = index.Consider(Create(stale, VideoFormat.M3u8));
+        var second = index.Consider(Create(fresh, VideoFormat.M3u8));
+
+        Assert.Equal(VideoAdmissionKind.Update, second.Kind);
+        Assert.Equal(fresh, second.Video.Url);
+        Assert.Equal(first.Video.Id, second.Video.Id);
+    }
+
+    /// <summary>
+    /// 参数名集合不同的两条地址不能判定为「重新签名」——
+    /// 参数结构变了意味着很可能是另一个资源，而不是同一资源换了 token。
+    /// </summary>
+    [Fact]
+    public void Should_NotTreatAsResigned_WhenQueryParameterNamesDiffer()
+    {
+        var index = new VideoFamilyIndex();
+
+        index.Consider(Create("https://cdn.test/hls/video/playlist.m3u8?auth_key=aaa", VideoFormat.M3u8));
+        var second = index.Consider(Create("https://cdn.test/hls/video/playlist.m3u8?token=bbb", VideoFormat.M3u8));
+
+        // 旧签名被剔除后两条地址的指纹相同，但参数名集合不同（auth_key vs token），
+        // 不得作为续签原地替换；宁可忽略也不能覆盖已有行。
+        Assert.Equal(VideoAdmissionKind.Ignored, second.Kind);
+    }
+
+    /// <summary>
     /// 构造一个嗅探结果。
     /// </summary>
     /// <param name="url">资源地址。</param>

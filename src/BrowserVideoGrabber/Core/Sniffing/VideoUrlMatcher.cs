@@ -107,6 +107,29 @@ public static class VideoUrlMatcher
     };
 
     /// <summary>
+    /// 签名参数名单：这些 query 参数承载的是临时凭证（一次性 token、时间戳、签名），
+    /// 同一资源续签后值会变化，因此从去重指纹中剔除。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 未列入名单的参数默认<b>保留</b>（保守策略）：身份参数（<c>id</c> / <c>vid</c> / <c>src</c> …）
+    /// 都属于此类，它们承载「这是哪个视频」的信息，剔除会让不同视频碰撞成同一指纹而互相替换。
+    /// 代价是未知的签名参数会被保留、同一资源续签时可能多出一行 —— 宁可多行，不可串行。
+    /// </para>
+    /// <para>
+    /// 维护约定：发现新的签名参数名时加进本名单即可，无需改动其它代码。
+    /// </para>
+    /// </remarks>
+    private static readonly HashSet<string> SignatureParameterNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "auth", "auth_key", "authorization", "token", "access_token",
+        "sign", "signature", "sig", "verify", "key",
+        "expires", "expire", "exp", "timestamp", "t", "ts",
+        "hmac", "nonce", "rnd", "random",
+        "wmskey", "hdnts", "hdnea", "policy"
+    };
+
+    /// <summary>
     /// 判断给定地址与内容类型是否构成一个可下载的视频资源。
     /// </summary>
     /// <param name="url">资源地址，允许为 null（仅有响应头而无地址的场景）。</param>
@@ -255,11 +278,92 @@ public static class VideoUrlMatcher
     /// <param name="url">原始地址。</param>
     /// <returns>归一化后整体转小写的字符串。</returns>
     /// <remarks>
-    /// 指纹刻意忽略 query：流媒体地址普遍带有一次性 token，
-    /// 同一个资源在播放过程中会被上报多次，若不忽略 query，界面列表会被同一条资源刷屏。
+    /// <para>
+    /// 指纹剔除<b>签名参数</b>（见 <see cref="SignatureParameterNames"/>）：
+    /// 流媒体地址普遍带有一次性 token，同一个资源在播放过程中会被上报多次，
+    /// 若不剔除，界面列表会被同一条资源刷屏。
+    /// </para>
+    /// <para>
+    /// 其余 query 参数（身份参数如 <c>id</c> / <c>vid</c>，以及未知参数）<b>保留在指纹中</b>：
+    /// 大量 CMS 的视频地址形如 <c>play?id=123&amp;sign=abc</c>，不同视频路径相同、仅 query 不同；
+    /// 剔除全部 query 会让它们碰撞成同一指纹，进而被家族索引当作「同一视频重新签名」
+    /// 而原地互相替换（表现为新页面的视频覆盖旧页面的行）。
+    /// </para>
+    /// <para>
+    /// 参数按名称排序后拼接，因此书写顺序不影响指纹；fragment 一律剔除。
     /// 代价是大小写不同的两条路径（如 <c>/A.m3u8</c> 与 <c>/a.m3u8</c>）会被视为同一资源，
     /// 这在实践中极为罕见，可以接受。
+    /// </para>
     /// </remarks>
     public static string Fingerprint(string? url)
-        => Normalize(url).ToLowerInvariant();
+    {
+        var normalized = Normalize(url);
+        if (normalized.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        // Normalize 已去掉 query 与 fragment；从原始地址重新取 query 中的保留参数
+        var keptQuery = string.Empty;
+        if (!string.IsNullOrWhiteSpace(url)
+            && Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+            && uri.Query.Length > 1)
+        {
+            var kept = new List<string>();
+
+            foreach (var pair in uri.Query[1..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = pair.IndexOf('=');
+                var name = (eq >= 0 ? pair[..eq] : pair).Trim();
+                if (name.Length == 0 || SignatureParameterNames.Contains(name))
+                {
+                    continue;
+                }
+
+                kept.Add(pair);
+            }
+
+            if (kept.Count > 0)
+            {
+                kept.Sort(StringComparer.Ordinal);
+                keptQuery = "?" + string.Join('&', kept);
+            }
+        }
+
+        return (normalized + keptQuery).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// 提取地址 query 中的全部参数名（含签名参数），按序返回。
+    /// </summary>
+    /// <param name="url">原始地址。</param>
+    /// <returns>排序后的参数名列表；无 query 或无法解析时为空列表。</returns>
+    /// <remarks>
+    /// 供「重新签名」判定使用：只有参数名集合一致、仅参数值变化时，
+    /// 才能认定是同一资源换了新 token；参数结构不同很可能是另一个资源。
+    /// </remarks>
+    public static IReadOnlyList<string> QueryParameterNames(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)
+            || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+            || uri.Query.Length <= 1)
+        {
+            return Array.Empty<string>();
+        }
+
+        var names = new List<string>();
+
+        foreach (var pair in uri.Query[1..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = pair.IndexOf('=');
+            var name = (eq >= 0 ? pair[..eq] : pair).Trim();
+            if (name.Length > 0)
+            {
+                names.Add(name);
+            }
+        }
+
+        names.Sort(StringComparer.Ordinal);
+        return names;
+    }
 }

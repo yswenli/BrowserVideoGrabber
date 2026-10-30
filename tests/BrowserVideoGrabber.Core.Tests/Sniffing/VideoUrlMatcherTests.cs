@@ -169,4 +169,55 @@ public sealed class VideoUrlMatcherTests
 
         Assert.NotEqual(hd, sd);
     }
+
+    /// <summary>
+    /// 身份参数（id / vid 等）承载的是「这是哪个视频」的信息，
+    /// 必须参与指纹，否则不同视频会被误判为同一资源而互相替换。
+    /// </summary>
+    [Fact]
+    public void Fingerprint_ShouldDistinguishDifferentIdentityQueryParams()
+    {
+        var first = VideoUrlMatcher.Fingerprint("https://a.com/play?id=111&sign=aaa");
+        var second = VideoUrlMatcher.Fingerprint("https://a.com/play?id=222&sign=bbb");
+
+        Assert.NotEqual(first, second);
+    }
+
+    /// <summary>
+    /// 签名参数（auth_key / token 等）承载的是临时凭证，
+    /// 同一资源续签后必须产生相同指纹，否则列表会被同一视频刷屏。
+    /// </summary>
+    [Fact]
+    public void Fingerprint_ShouldIgnoreSignatureQueryParams()
+    {
+        var first = VideoUrlMatcher.Fingerprint("https://a.com/hls/index.m3u8?auth_key=aaa&id=1");
+        var second = VideoUrlMatcher.Fingerprint("https://a.com/hls/index.m3u8?auth_key=bbb&id=1");
+
+        Assert.Equal(first, second);
+    }
+
+    /// <summary>
+    /// query 参数的书写顺序不影响资源身份。
+    /// </summary>
+    [Fact]
+    public void Fingerprint_ShouldIgnoreQueryParameterOrder()
+    {
+        var first = VideoUrlMatcher.Fingerprint("https://a.com/play?id=1&auth_key=aaa");
+        var second = VideoUrlMatcher.Fingerprint("https://a.com/play?auth_key=bbb&id=1");
+
+        Assert.Equal(first, second);
+    }
+
+    /// <summary>
+    /// 未知参数默认保留（保守策略）：宁可同一资源多出一行，
+    /// 也不能把不同视频合并成一行互相替换。
+    /// </summary>
+    [Fact]
+    public void Fingerprint_ShouldKeepUnknownQueryParamsByDefault()
+    {
+        var first = VideoUrlMatcher.Fingerprint("https://a.com/play?foo=1");
+        var second = VideoUrlMatcher.Fingerprint("https://a.com/play?foo=2");
+
+        Assert.NotEqual(first, second);
+    }
 }

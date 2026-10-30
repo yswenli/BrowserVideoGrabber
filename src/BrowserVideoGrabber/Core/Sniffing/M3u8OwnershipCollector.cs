@@ -114,7 +114,9 @@ public static class M3u8OwnershipCollector
             return;
         }
 
-        var normalized = VideoUrlMatcher.Fingerprint(url);
+        // 用 Normalize 而非 Fingerprint：Fingerprint 保留身份参数，
+        // 若拿它切目录，同一物理目录会因 query 不同分裂出多个归属键，分片折叠失效。
+        var normalized = VideoUrlMatcher.Normalize(url).ToLowerInvariant();
         var slashIndex = normalized.LastIndexOf('/');
 
         if (slashIndex > 0)

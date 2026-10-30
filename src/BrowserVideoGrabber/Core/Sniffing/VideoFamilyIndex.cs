@@ -210,6 +210,8 @@ public sealed class VideoFamilyIndex
     /// <param name="directory">目录文本，形如 <c>https://host/hls/720p</c>。</param>
     /// <returns>去掉查询串、去掉末尾斜杠并转小写的目录键；输入为空时返回空串。</returns>
     /// <remarks>
+    /// 目录键刻意不含 query：分片折叠按物理目录进行，
+    /// 若让身份参数参与目录键，同一目录下带不同 query 的分片会分裂成多个家族，折叠随之失效。
     /// 入参必须是目录而不是文件地址：本方法<b>不会</b>去掉最后一段路径。
     /// 若误传 <c>https://host/hls/index.m3u8</c>，得到的是一个永不匹配的键，
     /// 抑制会静默失效且不会有任何报错 —— 目录键请用
@@ -222,7 +224,7 @@ public sealed class VideoFamilyIndex
             return string.Empty;
         }
 
-        return VideoUrlMatcher.Fingerprint(directory).TrimEnd('/');
+        return VideoUrlMatcher.Normalize(directory).ToLowerInvariant().TrimEnd('/');
     }
 
     /// <summary>
@@ -493,7 +495,8 @@ public sealed class VideoFamilyIndex
     /// <param name="candidate">新到达的候选。</param>
     /// <param name="existing">家族中已保存的条目。</param>
     /// <returns>
-    /// 两者归一化地址（已去查询串）相同、但原始地址不同时返回 true，即仅查询串发生了变化。
+    /// 归一化地址（已去查询串）相同、原始地址不同、且 query 参数名集合一致时返回 true，
+    /// 即仅签名参数的值发生了变化。
     /// </returns>
     /// <remarks>
     /// <para>
@@ -507,13 +510,21 @@ public sealed class VideoFamilyIndex
     /// 同一目录下的 <c>seg-1.ts</c> 与 <c>seg-2.ts</c> 地址本就不同，却不是重新签名，
     /// 若只判「地址不同」会把每个分片都当成一次升级，分片折叠随之失效。
     /// </para>
+    /// <para>
+    /// <b>必须要求参数名集合一致</b>：<c>?auth_key=a</c> 与 <c>?token=b</c> 参数结构完全不同，
+    /// 更可能是另一个资源而非续签；无条件当作续签会让新页面的视频原地覆盖旧页面的行。
+    /// </para>
     /// </remarks>
     private static bool IsResigned(SniffedVideo candidate, SniffedVideo existing)
         => !string.Equals(candidate.Url, existing.Url, StringComparison.Ordinal)
            && string.Equals(
                VideoUrlMatcher.Fingerprint(candidate.Url),
                VideoUrlMatcher.Fingerprint(existing.Url),
-               StringComparison.Ordinal);
+               StringComparison.Ordinal)
+           && VideoUrlMatcher.QueryParameterNames(candidate.Url)
+               .SequenceEqual(
+                   VideoUrlMatcher.QueryParameterNames(existing.Url),
+                   StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 以候选为准合并旧条目的元数据。
@@ -551,13 +562,15 @@ public sealed class VideoFamilyIndex
         || (!string.IsNullOrEmpty(candidate.ContentType) && string.IsNullOrEmpty(existing.ContentType));
 
     /// <summary>
-    /// 取出地址所在目录（指纹形式，已去查询串并转小写）。
+    /// 取出地址所在目录（已去查询串并转小写）。
     /// </summary>
     /// <param name="url">资源地址。</param>
     /// <returns>目录键；无目录部分时返回空串。</returns>
     private static string ResolveDirectory(string url)
     {
-        var normalized = VideoUrlMatcher.Fingerprint(url);
+        // 用 Normalize 而非 Fingerprint：Fingerprint 现在保留身份参数，
+        // 若拿它切目录，同一物理目录下带不同 query 的分片会分裂成多个家族。
+        var normalized = VideoUrlMatcher.Normalize(url).ToLowerInvariant();
         var slashIndex = normalized.LastIndexOf('/');
 
         return slashIndex > 0 ? normalized[..slashIndex] : string.Empty;
