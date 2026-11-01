@@ -315,6 +315,8 @@ public sealed class MainForm : Form
         _browserPane.Navigated += OnBrowserNavigated;
         _browserPane.FavoriteRequested += OnFavoriteRequested;
         _browserPane.ActiveTabChanged += (_, _) => SetFavoriteButtonState();
+        // URL 变化（导航开始）时立即更新收藏按钮，避免加载期间状态不一致
+        _browserPane.CurrentUrlChanged += (_, _) => SetFavoriteButtonState();
 
         _sniffPane.DownloadRequested += OnDownloadRequested;
         _sniffPane.PreviewRequested += OnPreviewRequested;

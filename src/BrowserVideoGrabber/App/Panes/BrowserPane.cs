@@ -213,6 +213,15 @@ public sealed class BrowserPane : UserControl
     /// <summary>活动标签导航完成（无论成败）；成功时可用于写入历史。</summary>
     public event EventHandler<BrowserTabNavigatedEventArgs>? Navigated;
 
+    /// <summary>
+    /// 活动标签的地址变化时触发（导航开始时即触发，不必等到导航完成）。
+    /// </summary>
+    /// <remarks>
+    /// 用于需要立即响应 URL 变化的 UI 状态（如收藏按钮），
+    /// 避免页面加载期间按钮状态与实际 URL 不一致。
+    /// </remarks>
+    public event EventHandler? CurrentUrlChanged;
+
     /// <summary>用户请求收藏/取消收藏当前页面。</summary>
     public event EventHandler<FavoriteToggleEventArgs>? FavoriteRequested;
 
@@ -537,12 +546,13 @@ public sealed class BrowserPane : UserControl
         }
     }
 
-    /// <summary>标签地址变化：活动标签时同步地址栏。</summary>
+    /// <summary>标签地址变化：活动标签时同步地址栏并通知外部。</summary>
     private void OnTabUrlChanged(object? sender, BrowserTab tab)
     {
         if (ReferenceEquals(tab, _activeTab))
         {
             SyncAddressBar();
+            CurrentUrlChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
