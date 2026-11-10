@@ -51,6 +51,12 @@ public sealed class BrowserTabStrip : Control
     private const int NewButtonWidth = 28;
     private const int TextPadding = 8;
 
+    /// <summary>横向滚动条高度（px）。刻意做得非常窄，只在标签放不下时出现。</summary>
+    private const int ScrollbarHeight = 6;
+
+    /// <summary>滚动条 thumb 的最小宽度（px），保证可点击。</summary>
+    private const int MinThumbWidth = 30;
+
     private readonly List<BrowserTab> _tabs = new();
 
     private BrowserTab? _activeTab;
@@ -58,12 +64,23 @@ public sealed class BrowserTabStrip : Control
     private bool _hoverClose;
     private bool _hoverNew;
 
+    /// <summary>横向滚动偏移（px），内容超出视口时生效。</summary>
+    private int _scrollOffset;
+
+    /// <summary>滚动条 thumb 是否正被拖动。</summary>
+    private bool _thumbDragging;
+
+    /// <summary>拖动开始时的鼠标 X 与滚动偏移，用于计算拖动位移。</summary>
+    private int _dragStartX;
+    private int _dragStartOffset;
+
     /// <summary>
     /// 初始化标签条。
     /// </summary>
     public BrowserTabStrip()
     {
-        Height = 30;
+        // 2px 顶距 + 26px 标签 + 2px 缝隙 + 6px 滚动条 = 36
+        Height = 36;
         Dock = DockStyle.Top;
 
         // 自绘控件必须开启双缓冲，否则鼠标移动时高亮会明显闪烁
@@ -92,6 +109,12 @@ public sealed class BrowserTabStrip : Control
         set
         {
             _activeTab = value;
+
+            if (value is not null)
+            {
+                EnsureTabVisible(value);
+            }
+
             Invalidate();
         }
     }
@@ -108,6 +131,7 @@ public sealed class BrowserTabStrip : Control
         ArgumentNullException.ThrowIfNull(tab);
 
         _tabs.Add(tab);
+        EnsureTabVisible(tab);
         Invalidate();
     }
 
@@ -126,6 +150,8 @@ public sealed class BrowserTabStrip : Control
             _activeTab = null;
         }
 
+        // 标签变少后偏移可能越界，钳回来
+        ScrollTo(_scrollOffset);
         Invalidate();
     }
 
@@ -139,7 +165,20 @@ public sealed class BrowserTabStrip : Control
 
         for (var index = 0; index < _tabs.Count; index++)
         {
+            var bounds = GetTabRect(index);
+
+            // 完全落在视口外的标签不绘制（滚动后左右两侧都会有）
+            if (bounds.Right < 0 || bounds.Left > ClientSize.Width)
+            {
+                continue;
+            }
+
             DrawTab(graphics, _tabs[index], index);
+        }
+
+        if (NeedsScrollbar)
+        {
+            DrawScrollbar(graphics);
         }
 
         // 已移除此处的「新建标签」按钮绘制：标签数量受 MaxTabs 限制，
@@ -150,6 +189,28 @@ public sealed class BrowserTabStrip : Control
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+
+        // thumb 拖动中：按拖动位移映射滚动偏移，不参与标签悬停判定
+        if (_thumbDragging)
+        {
+            if (!NeedsScrollbar)
+            {
+                _thumbDragging = false;
+                return;
+            }
+
+            var thumbWidth = GetThumbRect().Width;
+            var maxThumbX = GetScrollbarRect().Width - thumbWidth;
+
+            if (maxThumbX > 0)
+            {
+                var startThumbX = (int)((long)_dragStartOffset * maxThumbX / MaxScrollOffset);
+                var newThumbX = Math.Clamp(startThumbX + (e.X - _dragStartX), 0, maxThumbX);
+                ScrollTo((int)((long)newThumbX * MaxScrollOffset / maxThumbX));
+            }
+
+            return;
+        }
 
         var hit = HitTest(e.Location);
 
@@ -162,6 +223,37 @@ public sealed class BrowserTabStrip : Control
         _hoverClose = hit.OnClose;
         _hoverNew = hit.OnNew;
         Invalidate();
+    }
+
+    /// <inheritdoc />
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        _thumbDragging = false;
+    }
+
+    /// <inheritdoc />
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+
+        if (!NeedsScrollbar)
+        {
+            return;
+        }
+
+        // 每格滚动约 3 个标签宽；向上滚 → 内容向左（偏移减小）
+        var step = (TabWidth + TabGap) * 3;
+        ScrollTo(_scrollOffset - Math.Sign(e.Delta) * step);
+    }
+
+    /// <inheritdoc />
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+
+        // 视口变宽后偏移可能超出新范围，钳回来
+        ScrollTo(_scrollOffset);
     }
 
     /// <inheritdoc />
@@ -182,6 +274,32 @@ public sealed class BrowserTabStrip : Control
 
         if (e.Button != MouseButtons.Left)
         {
+            return;
+        }
+
+        // 滚动条优先于标签命中：两者在垂直方向不重叠，这里只是把拖动与轨道点击分流
+        if (NeedsScrollbar && GetScrollbarRect().Contains(e.Location))
+        {
+            var thumb = GetThumbRect();
+
+            if (thumb.Contains(e.Location))
+            {
+                _thumbDragging = true;
+                _dragStartX = e.X;
+                _dragStartOffset = _scrollOffset;
+            }
+            else
+            {
+                // 点击轨道：把 thumb 中心移动到点击位置（thumb 顶满轨道时无处可滚）
+                var maxThumbX = GetScrollbarRect().Width - thumb.Width;
+
+                if (maxThumbX > 0)
+                {
+                    var targetThumbX = Math.Clamp(e.X - thumb.Width / 2, 0, maxThumbX);
+                    ScrollTo((int)((long)targetThumbX * MaxScrollOffset / maxThumbX));
+                }
+            }
+
             return;
         }
 
@@ -320,7 +438,7 @@ public sealed class BrowserTabStrip : Control
     /// <returns>标签矩形。</returns>
     private Rectangle GetTabRect(int index)
         => new(
-            TabGap + index * (TabWidth + TabGap),
+            TabGap + index * (TabWidth + TabGap) - _scrollOffset,
             2,
             TabWidth,
             TabHeight);
@@ -346,8 +464,95 @@ public sealed class BrowserTabStrip : Control
     /// <returns>按钮矩形。</returns>
     private Rectangle GetNewButtonRect()
     {
-        var left = TabGap + _tabs.Count * (TabWidth + TabGap) + TabGap;
+        var left = TabGap + _tabs.Count * (TabWidth + TabGap) + TabGap - _scrollOffset;
         return new Rectangle(left, 2, NewButtonWidth, TabHeight);
+    }
+
+    /// <summary>标签内容的总宽度（px，含两侧留白）。</summary>
+    private int TotalWidth => TabGap + _tabs.Count * (TabWidth + TabGap) + TabGap;
+
+    /// <summary>最大可滚动偏移（px）；内容未溢出时为 0。</summary>
+    private int MaxScrollOffset => Math.Max(0, TotalWidth - ClientSize.Width);
+
+    /// <summary>内容是否溢出视口（决定是否绘制滚动条）。</summary>
+    private bool NeedsScrollbar => MaxScrollOffset > 0;
+
+    /// <summary>滚动条轨道矩形（控制条最底部）。</summary>
+    private Rectangle GetScrollbarRect()
+        => new(0, Height - ScrollbarHeight, ClientSize.Width, ScrollbarHeight);
+
+    /// <summary>
+    /// 计算 thumb（滑块）矩形：宽度按可视比例缩放，位置按当前偏移映射。
+    /// </summary>
+    private Rectangle GetThumbRect()
+    {
+        var track = GetScrollbarRect();
+        var view = Math.Max(1, ClientSize.Width);
+
+        var thumbWidth = Math.Clamp((int)((long)view * track.Width / TotalWidth), MinThumbWidth, track.Width);
+        var maxThumbX = track.Width - thumbWidth;
+        var maxScroll = MaxScrollOffset;
+
+        var thumbX = maxScroll == 0
+            ? 0
+            : (int)((long)_scrollOffset * maxThumbX / maxScroll);
+
+        return new Rectangle(track.Left + thumbX, track.Top + 1, thumbWidth, track.Height - 2);
+    }
+
+    /// <summary>把滚动偏移限制在合法范围并刷新。</summary>
+    private void ScrollTo(int offset)
+    {
+        var clamped = Math.Clamp(offset, 0, MaxScrollOffset);
+
+        if (clamped == _scrollOffset)
+        {
+            return;
+        }
+
+        _scrollOffset = clamped;
+        Invalidate();
+    }
+
+    /// <summary>确保指定标签完整落在视口内（必要时滚动）。</summary>
+    /// <param name="tab">目标标签。</param>
+    private void EnsureTabVisible(BrowserTab tab)
+    {
+        var index = _tabs.IndexOf(tab);
+        if (index < 0 || MaxScrollOffset == 0)
+        {
+            return;
+        }
+
+        // rect 基于当前偏移计算：右缘超界则右滚，左缘出界则左滚
+        var rect = GetTabRect(index);
+        var offset = _scrollOffset;
+
+        if (rect.Right > ClientSize.Width)
+        {
+            offset += rect.Right - ClientSize.Width;
+        }
+
+        if (rect.Left < 0)
+        {
+            offset += rect.Left;
+        }
+
+        ScrollTo(offset);
+    }
+
+    /// <summary>绘制底部窄滚动条（仅在内容溢出时由 <see cref="OnPaint"/> 调用）。</summary>
+    private void DrawScrollbar(Graphics graphics)
+    {
+        var track = GetScrollbarRect();
+
+        using var trackBrush = new SolidBrush(Color.FromArgb(224, 224, 224));
+        graphics.FillRectangle(trackBrush, track);
+
+        var thumb = GetThumbRect();
+
+        using var thumbBrush = new SolidBrush(Color.FromArgb(150, 150, 150));
+        graphics.FillRectangle(thumbBrush, thumb);
     }
 
     /// <summary>

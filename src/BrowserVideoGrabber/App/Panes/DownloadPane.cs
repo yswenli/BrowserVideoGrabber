@@ -186,7 +186,9 @@ public sealed class DownloadPane : UserControl
             item = CreateItem(targetList);
             _itemsById[task.Id] = item;
             _hostListById[task.Id] = targetList;
-            targetList.Items.Add(item);
+
+            // 插入到最上面：新任务最先被看到，不必在长列表底部寻找
+            targetList.Items.Insert(0, item);
         }
         else if (!ReferenceEquals(_hostListById[task.Id], targetList))
         {
@@ -195,7 +197,7 @@ public sealed class DownloadPane : UserControl
             // （例如「已下载」页签的说明列会永远空白，用户看不到失败原因与输出路径）
             _hostListById[task.Id].Items.Remove(item);
             BufferedListView.EnsureSubItems(item, targetList);
-            targetList.Items.Add(item);
+            targetList.Items.Insert(0, item);
             _hostListById[task.Id] = targetList;
         }
 
