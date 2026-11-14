@@ -391,6 +391,10 @@ public sealed class SniffPaneTests
         });
 
         thread.SetApartmentState(ApartmentState.STA);
+
+        // 超时用的是 Assert.Fail，此时线程仍在运行；前台线程会拖住 testhost 无法退出，
+        // 表现为「整个测试运行挂起」而不是「单个用例失败」。
+        thread.IsBackground = true;
         thread.Start();
 
         if (!thread.Join(TimeSpan.FromSeconds(30)))
