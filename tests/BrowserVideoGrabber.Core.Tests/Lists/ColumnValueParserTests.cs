@@ -103,6 +103,17 @@ public sealed class ColumnValueParserTests
         Assert.Null(ColumnValueParser.ParseSize(text));
     }
 
+    [Fact]
+    public void ParseSize_ReturnsNull_WhenNumberOverflowsToInfinity()
+    {
+        // 400 位数字会让 double.TryParse 返回 Infinity，必须拒绝而不是把它当排序键
+        var text = new string('9', 400) + " GB";
+
+        Assert.Null(ColumnValueParser.ParseSize(text));
+        Assert.Null(ColumnValueParser.ParseQuantity(text));
+        Assert.Null(ColumnValueParser.ParseDownloaded($"{text} / 100 MB"));
+    }
+
     [Theory]
     [InlineData("3.4 MB/s", 3565158.4d)]
     [InlineData("3.4 MB /s", 3565158.4d)]

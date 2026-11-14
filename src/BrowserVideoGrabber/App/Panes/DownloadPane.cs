@@ -370,7 +370,7 @@ public sealed class DownloadPane : UserControl
     /// 两条链路产出的进度字段互斥：ffmpeg 只填 <see cref="DownloadProgress.SpeedMultiplier"/>，
     /// 原生 HTTP 只填 <see cref="DownloadProgress.BytesPerSecond"/>，据此判断用哪种呈现。
     /// </remarks>
-    private static string FormatSpeed(DownloadProgress? progress)
+    internal static string FormatSpeed(DownloadProgress? progress)
     {
         if (progress is null)
         {
@@ -407,7 +407,7 @@ public sealed class DownloadPane : UserControl
     /// 硬套字节格式会把真实进度显示成 <c>- / 未知</c>，故优先识别 <see cref="DownloadProgress.Processed"/>。
     /// </para>
     /// </remarks>
-    private static string FormatDownloaded(DownloadProgress? progress, DownloadTask task)
+    internal static string FormatDownloaded(DownloadProgress? progress, DownloadTask task)
     {
         // ffmpeg 链路：用媒体时长表达进度
         if (progress?.Processed is { } processed)
