@@ -45,6 +45,21 @@ public sealed class FakeFileSystem : IFileSystem
     /// <summary>模拟的可用剩余空间（字节）。默认 100 GB，设为 0 可模拟磁盘写满。</summary>
     public long AvailableFreeSpace { get; set; } = 100L * 1024 * 1024 * 1024;
 
+    /// <summary>设置后，<see cref="OpenRead"/> 抛出该异常（模拟文件被独占）。</summary>
+    public Exception? OpenReadException { get; set; }
+
+    /// <summary>设置后，<see cref="OpenWrite"/> 抛出该异常（模拟磁盘满或只读）。</summary>
+    public Exception? OpenWriteException { get; set; }
+
+    /// <summary>最近一次 <see cref="OpenWrite"/> 传入的路径集合，用于断言临时文件名形态。</summary>
+    public List<string> OpenWritePaths { get; } = [];
+
+    /// <summary>设置后，<see cref="CreateDirectory"/> 抛出该异常（模拟权限不足）。</summary>
+    public Exception? CreateDirectoryException { get; set; }
+
+    /// <summary>设置后，<see cref="MoveFile"/> 抛出该异常（模拟改名失败）。</summary>
+    public Exception? MoveFileException { get; set; }
+
     /// <summary>已写入文件的路径集合快照。</summary>
     public IReadOnlyCollection<string> FilePaths => _files.Keys.ToList();
 
@@ -80,7 +95,15 @@ public sealed class FakeFileSystem : IFileSystem
     public long GetFileLength(string path) => _files.TryGetValue(path, out var content) ? content.Length : 0;
 
     /// <inheritdoc />
-    public void CreateDirectory(string path) => _directories[path] = true;
+    public void CreateDirectory(string path)
+    {
+        if (CreateDirectoryException is { } exception)
+        {
+            throw exception;
+        }
+
+        _directories[path] = true;
+    }
 
     /// <inheritdoc />
     public void DeleteFile(string path) => _files.TryRemove(path, out _);
@@ -111,6 +134,13 @@ public sealed class FakeFileSystem : IFileSystem
     /// <inheritdoc />
     public Stream OpenWrite(string path, bool append)
     {
+        if (OpenWriteException is { } exception)
+        {
+            throw exception;
+        }
+
+        OpenWritePaths.Add(path);
+
         // 追加模式以已有内容为基础构造可写流，写入完成后回写字典，模拟真实文件系统语义
         var existing = append && _files.TryGetValue(path, out var content) ? content : Array.Empty<byte>();
         return new MemoryWriteStream(existing, bytes => _files[path] = bytes);
@@ -118,7 +148,14 @@ public sealed class FakeFileSystem : IFileSystem
 
     /// <inheritdoc />
     public Stream OpenRead(string path)
-        => new MemoryStream(_files.TryGetValue(path, out var content) ? content : Array.Empty<byte>(), writable: false);
+    {
+        if (OpenReadException is { } exception)
+        {
+            throw exception;
+        }
+
+        return new MemoryStream(_files.TryGetValue(path, out var content) ? content : Array.Empty<byte>(), writable: false);
+    }
 
     /// <inheritdoc />
     public long GetAvailableFreeSpace(string path) => AvailableFreeSpace;
@@ -126,6 +163,11 @@ public sealed class FakeFileSystem : IFileSystem
     /// <inheritdoc />
     public void MoveFile(string sourcePath, string destinationPath, bool overwrite)
     {
+        if (MoveFileException is { } exception)
+        {
+            throw exception;
+        }
+
         if (!_files.TryRemove(sourcePath, out var content))
         {
             throw new FileNotFoundException("源文件不存在。", sourcePath);

@@ -67,6 +67,8 @@ namespace BrowserVideoGrabber.Core.Json;
 [JsonSerializable(typeof(List<FavoriteEntry>))]
 [JsonSerializable(typeof(List<HistoryEntry>))]
 [JsonSerializable(typeof(List<DownloadTask>))]
+[JsonSerializable(typeof(ColumnLayout))]
+[JsonSerializable(typeof(Dictionary<string, ColumnLayout>))]
 public partial class JsonModelsContext : JsonSerializerContext
 {
     /// <summary>

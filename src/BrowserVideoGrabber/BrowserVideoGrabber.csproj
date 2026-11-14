@@ -24,6 +24,11 @@
     <Content Include="favicon.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- 让测试工程能覆盖 internal 的界面格式化逻辑（列文本解析依赖其输出） -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="BrowserVideoGrabber.Core.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>

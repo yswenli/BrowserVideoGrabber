@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using System.Globalization;
+
 using BrowserVideoGrabber.Core.Models;
 
 namespace BrowserVideoGrabber.App.Formatting;
@@ -32,6 +34,8 @@ namespace BrowserVideoGrabber.App.Formatting;
 /// <remarks>
 /// 把「枚举 / 字节数 / 速度」到「中文字符串」的转换集中在一处，
 /// 避免同一个状态在三个页签里被写成三种不同的说法。
+/// 数字与日期一律用 <see cref="CultureInfo.InvariantCulture"/> 格式化：
+/// 列表排序会把这些文本解析回数值，若随系统区域变化（如德语 <c>1,2 MB</c>）就会解析错误。
 /// </remarks>
 internal static class DisplayText
 {
@@ -91,16 +95,26 @@ internal static class DisplayText
         }
 
         // 字节量级直接显示整数，避免出现 "512.00 B" 这种别扭写法
-        return unit == 0 ? $"{bytes} B" : $"{value:0.##} {SizeUnits[unit]}";
+        return unit == 0
+            ? $"{bytes} B"
+            : $"{value.ToString("0.##", CultureInfo.InvariantCulture)} {SizeUnits[unit]}";
     }
 
     /// <summary>
     /// 把下载速度格式化为便于阅读的文本。
     /// </summary>
     /// <param name="bytesPerSecond">每秒字节数。</param>
-    /// <returns>形如 <c>3.4 MB/s</c> 的文本；未知时返回 <c>-</c>。</returns>
+    /// <returns>形如 <c>3.4 MB/s</c> 的文本；未知或不足 1 字节/秒时返回 <c>-</c>。</returns>
     public static string Speed(double bytesPerSecond)
-        => bytesPerSecond <= 0 ? "-" : $"{Size((long)bytesPerSecond)}/s";
+    {
+        // 不足 1 B/s 时 (long) 会截断成 0，直接拼 "/s" 会产出 "-/s" 这种非法文本
+        if (!double.IsFinite(bytesPerSecond) || bytesPerSecond < 1d || bytesPerSecond > long.MaxValue)
+        {
+            return "-";
+        }
+
+        return $"{Size((long)bytesPerSecond)}/s";
+    }
 
     /// <summary>
     /// 把进度百分比格式化为文本。
@@ -109,7 +123,9 @@ internal static class DisplayText
     /// <param name="hasTotal">是否已知总量。</param>
     /// <returns>已知总量时为百分比，否则为 <c>未知</c>。</returns>
     public static string Percent(double percent, bool hasTotal)
-        => hasTotal ? $"{Math.Clamp(percent, 0d, 100d):0.0}%" : "计算中…";
+        => hasTotal
+            ? Math.Clamp(percent, 0d, 100d).ToString("0.0", CultureInfo.InvariantCulture) + "%"
+            : "计算中…";
 
     /// <summary>
     /// 把时间格式化为短文本。
@@ -117,7 +133,7 @@ internal static class DisplayText
     /// <param name="time">时间；为空返回 <c>-</c>。</param>
     /// <returns>形如 <c>09-13 01:20</c> 的文本。</returns>
     public static string Time(DateTimeOffset? time)
-        => time.HasValue ? time.Value.ToString("MM-dd HH:mm") : "-";
+        => time.HasValue ? time.Value.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture) : "-";
 
     /// <summary>
     /// 把视频时长（秒）格式化为可读文本。
@@ -133,7 +149,9 @@ internal static class DisplayText
     /// </remarks>
     public static string Duration(double? seconds)
     {
-        if (seconds is not > 0)
+        if (seconds is not > 0
+            || !double.IsFinite(seconds.Value)
+            || seconds.Value > TimeSpan.MaxValue.TotalSeconds)
         {
             return "-";
         }

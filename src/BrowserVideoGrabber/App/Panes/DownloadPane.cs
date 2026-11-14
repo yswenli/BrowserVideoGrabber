@@ -22,8 +22,11 @@
 *
 *****************************************************************************/
 
+using System.Globalization;
+
 using BrowserVideoGrabber.App.Controls;
 using BrowserVideoGrabber.App.Formatting;
+using BrowserVideoGrabber.Core.Lists;
 using BrowserVideoGrabber.Core.Models;
 
 namespace BrowserVideoGrabber.App.Panes;
@@ -52,6 +55,12 @@ namespace BrowserVideoGrabber.App.Panes;
 /// </remarks>
 public sealed class DownloadPane : UserControl
 {
+    /// <summary>「正在下载」列表在 column-layouts.json 中的键。</summary>
+    public const string RunningLayoutKey = "download-running";
+
+    /// <summary>「已下载」列表在 column-layouts.json 中的键。</summary>
+    public const string FinishedLayoutKey = "download-finished";
+
     private readonly TabControl _tabs;
     private readonly BufferedListView _runningList;
     private readonly BufferedListView _finishedList;
@@ -74,10 +83,24 @@ public sealed class DownloadPane : UserControl
         BackColor = Color.FromArgb(250, 250, 250);
 
         _runningList = new BufferedListView { Dock = DockStyle.Fill };
-        _runningList.AddColumns(("标题", 200), ("进度", 80), ("速度", 90), ("已下载", 130), ("地址", 360));
+        _runningList.AddColumns(
+            ("标题", 200, null),
+            ("进度", 80, ColumnValueParser.ParseProgress),
+            ("速度", 90, ColumnValueParser.ParseSpeed),
+            ("已下载", 130, ColumnValueParser.ParseDownloaded),
+            ("地址", 360, null));
+        _runningList.LayoutChanged += (_, layout) =>
+            LayoutChanged?.Invoke(this, new ColumnLayoutChangedEventArgs(RunningLayoutKey, layout));
 
         _finishedList = new BufferedListView { Dock = DockStyle.Fill };
-        _finishedList.AddColumns(("标题", 200), ("结果", 70), ("大小", 90), ("完成时间", 110), ("说明", 360));
+        _finishedList.AddColumns(
+            ("标题", 200, null),
+            ("结果", 70, null),
+            ("大小", 90, ColumnValueParser.ParseSize),
+            ("完成时间", 110, ColumnValueParser.ParseMonthDay),
+            ("说明", 360, null));
+        _finishedList.LayoutChanged += (_, layout) =>
+            LayoutChanged?.Invoke(this, new ColumnLayoutChangedEventArgs(FinishedLayoutKey, layout));
 
         // 「正在下载」页签同时承载等待中 / 下载中 / 已暂停三种状态，
         // 这样被暂停或排队中的任务也能一眼看到，无需切换到另一个空标签
@@ -144,6 +167,16 @@ public sealed class DownloadPane : UserControl
     /// <summary>列表或页签上发起操作时触发。</summary>
     public event EventHandler<DownloadActionEventArgs>? ActionRequested;
 
+    /// <summary>任一列表的列顺序或列宽变化。</summary>
+    /// <remarks>
+    /// <para>
+    /// 拖动列宽时每变化一个像素就会触发一次，订阅方必须自行防抖后再持久化；
+    /// 程序化调用 <see cref="ApplyColumnLayout"/> 期间不会触发。
+    /// </para>
+    /// <para>事件在 UI 线程触发（<see cref="BufferedListView"/> 的约定）。</para>
+    /// </remarks>
+    public event EventHandler<ColumnLayoutChangedEventArgs>? LayoutChanged;
+
     /// <summary>
     /// 用完整任务列表重建三个页签。
     /// </summary>
@@ -180,6 +213,7 @@ public sealed class DownloadPane : UserControl
         _tasksById[task.Id] = task;
 
         var targetList = GetListView(task.Status);
+        var progress = _progressById.TryGetValue(task.Id, out var snapshot) ? snapshot : null;
 
         if (!_itemsById.TryGetValue(task.Id, out var item))
         {
@@ -187,24 +221,32 @@ public sealed class DownloadPane : UserControl
             _itemsById[task.Id] = item;
             _hostListById[task.Id] = targetList;
 
-            // 插入到最上面：新任务最先被看到，不必在长列表底部寻找
-            targetList.Items.Insert(0, item);
+            // 先填列再插入：排序插入的比较器读取的是子项文本，空行会被排到错误位置。
+            // 未排序时 InsertItemSorted 默认插到最上面，新任务最先被看到
+            FillItem(item, task, progress);
+            item.Tag = task;
+            targetList.InsertItemSorted(item);
         }
         else if (!ReferenceEquals(_hostListById[task.Id], targetList))
         {
             // 跨页签迁移：ListViewItem 同一时刻只能属于一个列表，必须先摘除再挂载。
-            // 三个页签的列数不同，目标页签更宽时必须先补齐子项，否则多出来的那一列写不进去
-            // （例如「已下载」页签的说明列会永远空白，用户看不到失败原因与输出路径）
+            // 两个页签的列数相同（均为 5 列），保留 EnsureSubItems 是为了兼容未来列数变化，
+            // 避免目标页签列数更多时多出来的列写不进去
             _hostListById[task.Id].Items.Remove(item);
             BufferedListView.EnsureSubItems(item, targetList);
-            targetList.Items.Insert(0, item);
+
+            FillItem(item, task, progress);
+            item.Tag = task;
+            targetList.InsertItemSorted(item);
             _hostListById[task.Id] = targetList;
         }
+        else
+        {
+            // 同一列表的刷新保持快照式：只改文本、不移动行，避免行在用户眼皮底下跳动
+            FillItem(item, task, progress);
+            item.Tag = task;
+        }
 
-        FillItem(item, task, _progressById.TryGetValue(task.Id, out var progress) ? progress : null);
-
-        // 回写任务引用：右键菜单与双击都靠行上的 Tag 还原任务，跨状态迁移后必须保持最新
-        item.Tag = task;
         UpdateSummary();
     }
 
@@ -232,6 +274,35 @@ public sealed class DownloadPane : UserControl
 
         FillRunningColumns(item, task, progress);
     }
+
+    /// <summary>
+    /// 应用指定列表的列布局。
+    /// </summary>
+    /// <param name="key">列表标识（<see cref="RunningLayoutKey"/> 或 <see cref="FinishedLayoutKey"/>）。</param>
+    /// <param name="layout">布局；为 null 时不做任何修改。</param>
+    /// <remarks>键无效时静默忽略。</remarks>
+    public void ApplyColumnLayout(string key, ColumnLayout? layout)
+        => GetListByLayoutKey(key)?.ApplyColumnLayout(layout);
+
+    /// <summary>
+    /// 读取指定列表的当前列布局。
+    /// </summary>
+    /// <param name="key">列表标识。</param>
+    /// <returns>列布局；键无效时返回 null。</returns>
+    public ColumnLayout? GetColumnLayout(string key)
+        => GetListByLayoutKey(key)?.GetColumnLayout();
+
+    /// <summary>
+    /// 按布局键定位列表。
+    /// </summary>
+    /// <param name="key">布局键。</param>
+    /// <returns>对应列表；未知键返回 null。</returns>
+    private BufferedListView? GetListByLayoutKey(string key) => key switch
+    {
+        RunningLayoutKey => _runningList,
+        FinishedLayoutKey => _finishedList,
+        _ => null
+    };
 
     /// <summary>
     /// 从列表中移除一个任务。
@@ -368,7 +439,7 @@ public sealed class DownloadPane : UserControl
     /// 两条链路产出的进度字段互斥：ffmpeg 只填 <see cref="DownloadProgress.SpeedMultiplier"/>，
     /// 原生 HTTP 只填 <see cref="DownloadProgress.BytesPerSecond"/>，据此判断用哪种呈现。
     /// </remarks>
-    private static string FormatSpeed(DownloadProgress? progress)
+    internal static string FormatSpeed(DownloadProgress? progress)
     {
         if (progress is null)
         {
@@ -377,7 +448,7 @@ public sealed class DownloadPane : UserControl
 
         if (progress.SpeedMultiplier > 0)
         {
-            return $"{progress.SpeedMultiplier:0.0}x";
+            return progress.SpeedMultiplier.ToString("0.0", CultureInfo.InvariantCulture) + "x";
         }
 
         return DisplayText.Speed(progress.BytesPerSecond);
@@ -405,16 +476,22 @@ public sealed class DownloadPane : UserControl
     /// 硬套字节格式会把真实进度显示成 <c>- / 未知</c>，故优先识别 <see cref="DownloadProgress.Processed"/>。
     /// </para>
     /// </remarks>
-    private static string FormatDownloaded(DownloadProgress? progress, DownloadTask task)
+    internal static string FormatDownloaded(DownloadProgress? progress, DownloadTask task)
     {
         // ffmpeg 链路：用媒体时长表达进度
         if (progress?.Processed is { } processed)
         {
             var total = progress.Total;
-            var totalText = total is { } totalValue
+            var totalText = total is { TotalSeconds: > 0 } totalValue
                 ? DisplayText.Duration(totalValue.TotalSeconds)
                 : "未知";
-            return $"{DisplayText.Duration(processed.TotalSeconds)} / {totalText}";
+
+            // 刚启动时已处理时长为 0；此时必须显示 00:00（比例 0），
+            // 不能复用 Duration(0) 的 "-"（那会被解析成「未知」而排到末尾）
+            var processedText = processed.TotalSeconds > 0
+                ? DisplayText.Duration(processed.TotalSeconds)
+                : "00:00";
+            return $"{processedText} / {totalText}";
         }
 
         // 原生 HTTP 链路：字节进度，progress 缺失时回退任务快照
@@ -422,7 +499,11 @@ public sealed class DownloadPane : UserControl
         var totalText2 = progress?.TotalBytes is > 0
             ? DisplayText.Size(progress.TotalBytes.Value)
             : "未知";
-        return $"{DisplayText.Size(downloaded)} / {totalText2}";
+
+        // 0 字节是已知的零值；DisplayText.Size(0) 的 "-" 表示「未知」，
+        // 直接复用会让刚启动的任务在「已下载」列被当成未知排到末尾
+        var downloadedText = downloaded > 0 ? DisplayText.Size(downloaded) : "0 B";
+        return $"{downloadedText} / {totalText2}";
     }
 
     /// <summary>
