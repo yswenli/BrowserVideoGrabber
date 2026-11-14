@@ -405,6 +405,27 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
+    /// 退出前直接按控件当前状态写盘。
+    /// </summary>
+    /// <remarks>
+    /// 列重排通知经 <c>BeginInvoke</c> 异步转发：若关闭消息与 <c>HDN_ENDDRAG</c>
+    /// 处在同一条消息里（如系统注销/关机），待写字典可能还没收到这次布局。
+    /// 退出路径直接读控件，把这段窗口关掉。
+    /// </remarks>
+    private void PersistCurrentColumnLayouts()
+    {
+        _host.ColumnLayouts.Save(SniffPane.LayoutKey, _sniffPane.GetColumnLayout());
+
+        foreach (var key in new[] { DownloadPane.RunningLayoutKey, DownloadPane.FinishedLayoutKey })
+        {
+            if (_downloadPane.GetColumnLayout(key) is { } layout)
+            {
+                _host.ColumnLayouts.Save(key, layout);
+            }
+        }
+    }
+
+    /// <summary>
     /// 处理嗅探面板的清空请求。
     /// </summary>
     /// <param name="sender">事件源。</param>
@@ -1238,6 +1259,7 @@ public sealed class MainForm : Form
             // 用户拖完列立刻关窗时，防抖计时器可能还没触发；退出前强制写一次
             _columnLayoutSaveTimer.Stop();
             FlushColumnLayouts();
+            PersistCurrentColumnLayouts();
 
             _host.RememberLastUrl(_browserPane.CurrentUrl);
 
