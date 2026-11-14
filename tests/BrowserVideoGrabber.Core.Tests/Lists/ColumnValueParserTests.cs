@@ -35,10 +35,8 @@ public sealed class ColumnValueParserTests
     [InlineData("12.5 MB", 13107200d)]
     [InlineData("1.2 GB", 1288490188.8d)]
     [InlineData("≈ 1.2 GB", 1288490188.8d)]
-    [InlineData("3.4 MB/s", 3565158.4d)]
     [InlineData("1.2x", 1.2d)]
     [InlineData("45.0%", 45d)]
-    [InlineData("12 / 30 片", 12d)]
     [InlineData("512 B", 512d)]
     [InlineData("0 B", 0d)]
     [InlineData("1 KB", 1024d)]
@@ -63,6 +61,12 @@ public sealed class ColumnValueParserTests
     [InlineData("1 PB")]
     [InlineData("1.2 Mbps")]
     [InlineData("-12.5 MB")]
+    [InlineData("≈ -1 MB")]
+    [InlineData("1,2 MB")]
+    [InlineData("1.2.3 MB")]
+    [InlineData("12 / 30 片")]
+    [InlineData("3.4 MB/s")]
+    [InlineData("9999999999999999999999999999999999999999 GB")]
     public void ParseQuantity_ReturnsNull_WhenNoNumberOrUnknownUnit(string? text)
     {
         Assert.Null(ColumnValueParser.ParseQuantity(text));
@@ -85,6 +89,12 @@ public sealed class ColumnValueParserTests
     [InlineData("3.4 MB/s")]
     [InlineData("1.2x")]
     [InlineData("45.0%")]
+    [InlineData("≈ -1 MB")]
+    [InlineData("-1 MB")]
+    [InlineData("1,2 MB")]
+    [InlineData("1.2.3 MB")]
+    [InlineData("9999999999999999999999999999999999999999 GB")]
+    [InlineData("999999999999 TB")]
     [InlineData("-")]
     [InlineData("")]
     [InlineData(null)]
@@ -95,6 +105,7 @@ public sealed class ColumnValueParserTests
 
     [Theory]
     [InlineData("3.4 MB/s", 3565158.4d)]
+    [InlineData("3.4 MB /s", 3565158.4d)]
     [InlineData("512 B/s", 512d)]
     [InlineData("1.5 GB/s", 1610612736d)]
     public void ParseSpeed_ReturnsBytesPerSecond(string text, double expected)
@@ -107,6 +118,10 @@ public sealed class ColumnValueParserTests
     [Theory]
     [InlineData("1.2x")]
     [InlineData("3.4 MB")]
+    [InlineData("≈ -1 MB/s")]
+    [InlineData("-1 MB/s")]
+    [InlineData("1,2 MB/s")]
+    [InlineData("1.2.3 MB/s")]
     [InlineData("-")]
     [InlineData("")]
     [InlineData(null)]
@@ -118,8 +133,10 @@ public sealed class ColumnValueParserTests
     [Theory]
     [InlineData("45.0%", 45d)]
     [InlineData("100.0%", 100d)]
+    [InlineData("150%", 100d)]
     [InlineData("12 / 30 片", 40d)]
     [InlineData("30 / 30 片", 100d)]
+    [InlineData("45 / 30 片", 100d)]
     [InlineData("0 / 30 片", 0d)]
     public void ParseProgress_NormalizesToPercent(string text, double expected)
     {
@@ -133,6 +150,9 @@ public sealed class ColumnValueParserTests
     [InlineData("等待中")]
     [InlineData("-")]
     [InlineData("12 / 0 片")]
+    [InlineData("-5 / 30 片")]
+    [InlineData("abc 5 / 30 片")]
+    [InlineData("1,2%")]
     [InlineData("")]
     [InlineData(null)]
     public void ParseProgress_ReturnsNull_WhenUnknown(string? text)
@@ -158,6 +178,7 @@ public sealed class ColumnValueParserTests
     [InlineData("abc")]
     [InlineData("12")]
     [InlineData("12:60")]
+    [InlineData("1:60:00")]
     [InlineData("1:2:3:4")]
     [InlineData("-1:20")]
     [InlineData("1:-2")]
@@ -216,6 +237,18 @@ public sealed class ColumnValueParserTests
         Assert.Equal(new DateTime(2024, 2, 29, 12, 0, 0), actual);
     }
 
+    [Fact]
+    public void ParseMonthDay_ReturnsNull_WhenReferenceYearIsMinimum()
+    {
+        Assert.Null(ColumnValueParser.ParseMonthDay("12-31 23:59", DateTime.MinValue));
+    }
+
+    [Fact]
+    public void ParseMonthDay_ReturnsNull_WhenDayIsInvalidNearMinimumYear()
+    {
+        Assert.Null(ColumnValueParser.ParseMonthDay("02-30 00:00", new DateTime(5, 1, 1)));
+    }
+
     [Theory]
     [InlineData("-")]
     [InlineData("2026-09-13")]
@@ -233,6 +266,9 @@ public sealed class ColumnValueParserTests
     [InlineData("01:20 / 02:00", 0.6666667d)]
     [InlineData("02:00:00 / 03:00:00", 0.6666667d)]
     [InlineData("100 MB / 100 MB", 1d)]
+    [InlineData("0 B / 100 MB", 0d)]
+    [InlineData("5 / 10 片", 0.5d)]
+    [InlineData("0 / 30 片", 0d)]
     public void ParseDownloaded_ReturnsCompletionRatio(string text, double expected)
     {
         var actual = Assert.IsType<double>(ColumnValueParser.ParseDownloaded(text));
@@ -244,6 +280,13 @@ public sealed class ColumnValueParserTests
     [InlineData("- / 未知")]
     [InlineData("12.5 MB / 未知")]
     [InlineData("01:20 / 未知")]
+    [InlineData("- / 100 MB")]
+    [InlineData("0 B / 0 B")]
+    [InlineData("12 / 0 片")]
+    [InlineData("5 / 0 片")]
+    [InlineData("12.5 MB / 02:00")]
+    [InlineData("01:20 / 100 MB")]
+    [InlineData("9999999999999999999999999999999999999999 GB / 100 MB")]
     [InlineData("-")]
     [InlineData("12.5 MB")]
     [InlineData("")]

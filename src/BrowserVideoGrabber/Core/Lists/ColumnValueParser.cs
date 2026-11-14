@@ -52,6 +52,9 @@ public static partial class ColumnValueParser
     private const double Gigabyte = Megabyte * 1024d;
     private const double Terabyte = Gigabyte * 1024d;
 
+    // 体积是字节数，业务上不可能超过 long 上限；超出视为解析失败，避免 Infinity 变成排序键
+    private const double MaxByteValue = long.MaxValue;
+
     /// <summary>
     /// 解析普通文本。
     /// </summary>
@@ -122,7 +125,9 @@ public static partial class ColumnValueParser
 
         if (trimmed.EndsWith('%'))
         {
-            return ParseQuantity(trimmed);
+            return ParseQuantity(trimmed) is double percent && double.IsFinite(percent)
+                ? Math.Clamp(percent, 0d, 100d)
+                : null;
         }
 
         var match = SegmentProgressPattern().Match(trimmed);
@@ -145,16 +150,21 @@ public static partial class ColumnValueParser
     /// <remarks>
     /// 这是通用解析器。具体列应优先使用 <see cref="ParseSize"/> / <see cref="ParseSpeed"/> /
     /// <see cref="ParseProgress"/> / <see cref="ParseDownloaded"/>，避免量纲混排。
+    /// 复合文本（含 <c>/</c>，如 <c>12 / 30 片</c>、<c>3.4 MB/s</c>）一律返回 <see langword="null"/>，
+    /// 防止调用方误把它当成单一数值。
     /// </remarks>
     public static IComparable? ParseQuantity(string? text)
     {
-        if (!TryExtractFirstNumber(text, out var value, out var unit)
+        if (string.IsNullOrWhiteSpace(text)
+            || text.Contains('/')
+            || !TryParseQuantityText(text, out var value, out var unit)
             || !TryGetMultiplier(unit, out var multiplier))
         {
             return null;
         }
 
-        return value * multiplier;
+        var result = value * multiplier;
+        return double.IsFinite(result) && result <= MaxByteValue ? result : null;
     }
 
     /// <summary>
@@ -181,7 +191,8 @@ public static partial class ColumnValueParser
         }
 
         var hours = 0;
-        if (parts.Length == 3 && !TryParsePart(parts[0], out hours))
+        if (parts.Length == 3
+            && (!TryParsePart(parts[0], out hours) || minutes > 59))
         {
             return null;
         }
@@ -259,7 +270,9 @@ public static partial class ColumnValueParser
 
         // 文本没有年份：从参考年份向前找第一个合法且不晚于参考时间的日期，
         // 这样 12-31 在次年 1 月会正确落到上一年，02-29 也能落到最近的闰年。
-        for (var year = reference.Year; year >= reference.Year - 8; year--)
+        // 下界必须夹在 1，否则参考年很小时 DaysInMonth(0, ...) 会抛异常。
+        var minYear = Math.Max(1, reference.Year - 8);
+        for (var year = reference.Year; year >= minYear; year--)
         {
             if (day > DateTime.DaysInMonth(year, month))
             {
@@ -279,12 +292,12 @@ public static partial class ColumnValueParser
     /// <summary>
     /// 解析「已下载」复合文本，换算成完成比例。
     /// </summary>
-    /// <param name="text">列文本，如 <c>12.5 MB / 100 MB</c>、<c>01:20 / 02:00</c>。</param>
+    /// <param name="text">列文本，如 <c>12.5 MB / 100 MB</c>、<c>01:20 / 02:00</c>、<c>5 / 10 片</c>。</param>
     /// <returns>
-    /// 0~1 的完成比例；总量未知（<c>/ 未知</c>）或无法解析时返回 <see langword="null"/>。
+    /// 0~1 的完成比例；总量未知（<c>/ 未知</c>）、两侧量纲不一致或无法解析时返回 <see langword="null"/>。
     /// </returns>
     /// <remarks>
-    /// 字节进度与时长进度量纲不同，不能直接比较；换算成比例后两者才可比。
+    /// 字节进度、时长进度与分片进度量纲不同，不能直接比较；换算成比例后三者才可比。
     /// 总量未知时宁可返回 <see langword="null"/> 排到末尾，也不要拿「已下载字节」与「比例」硬比。
     /// </remarks>
     public static IComparable? ParseDownloaded(string? text)
@@ -294,29 +307,83 @@ public static partial class ColumnValueParser
             return null;
         }
 
-        var slash = text.IndexOf('/');
+        var trimmed = text.Trim();
+
+        // 分片进度与字节/时长进度本质上都是「完成比例」，统一成 0~1 才能同列比较
+        var segment = SegmentProgressPattern().Match(trimmed);
+        if (segment.Success)
+        {
+            if (!TryParsePart(segment.Groups["done"].Value, out var done)
+                || !TryParsePart(segment.Groups["total"].Value, out var total)
+                || total <= 0)
+            {
+                return null;
+            }
+
+            return Math.Clamp(done / (double)total, 0d, 1d);
+        }
+
+        var slash = trimmed.IndexOf('/');
         if (slash < 0)
         {
             return null;
         }
 
-        var downloaded = ParseAmount(text[..slash].Trim());
-        var total = ParseAmount(text[(slash + 1)..].Trim());
+        if (!TryParseAmount(trimmed[..slash], out var downloadedKind, out var downloaded)
+            || !TryParseAmount(trimmed[(slash + 1)..], out var totalKind, out var totalValue)
+            || downloadedKind != totalKind
+            || totalValue <= 0d)
+        {
+            return null;
+        }
 
-        return downloaded is { } downloadedValue && total is { } totalValue && totalValue > 0d
-            ? Math.Clamp(downloadedValue / totalValue, 0d, 1d)
-            : null;
+        var ratio = downloaded / totalValue;
+        return double.IsFinite(ratio) ? Math.Clamp(ratio, 0d, 1d) : null;
     }
 
     /// <summary>
     /// 解析「已下载」中的单侧数值：带冒号按时长（秒），否则按体积（字节）。
     /// </summary>
     /// <param name="text">单侧文本。</param>
-    /// <returns>秒或字节；无法解析时返回 <see langword="null"/>。</returns>
-    private static double? ParseAmount(string text)
-        => text.Contains(':')
-            ? ParseDuration(text) is TimeSpan duration ? duration.TotalSeconds : null
-            : ParseSizeValue(text);
+    /// <param name="kind">量纲。</param>
+    /// <param name="value">秒或字节；允许为 0，负数视为无效。</param>
+    /// <returns>解析成功返回 true。</returns>
+    private static bool TryParseAmount(string text, out AmountKind kind, out double value)
+    {
+        var trimmed = text.Trim();
+
+        if (trimmed.Contains(':'))
+        {
+            kind = AmountKind.Duration;
+            if (ParseDuration(trimmed) is not TimeSpan duration)
+            {
+                value = 0d;
+                return false;
+            }
+
+            value = duration.TotalSeconds;
+        }
+        else
+        {
+            kind = AmountKind.Size;
+            if (ParseSizeValue(trimmed) is not double size)
+            {
+                value = 0d;
+                return false;
+            }
+
+            value = size;
+        }
+
+        return double.IsFinite(value) && value >= 0d;
+    }
+
+    /// <summary>「已下载」单侧数值的量纲。</summary>
+    private enum AmountKind
+    {
+        Size,
+        Duration
+    }
 
     /// <summary>
     /// 解析纯体积文本为字节数。
@@ -327,13 +394,14 @@ public static partial class ColumnValueParser
     {
         if (string.IsNullOrWhiteSpace(text)
             || text.Contains('/')
-            || !TryExtractFirstNumber(text, out var value, out var unit)
+            || !TryParseQuantityText(text, out var value, out var unit)
             || !TryGetSizeMultiplier(unit, out var multiplier))
         {
             return null;
         }
 
-        return value * multiplier;
+        var result = value * multiplier;
+        return double.IsFinite(result) && result <= MaxByteValue ? result : null;
     }
 
     /// <summary>
@@ -407,18 +475,23 @@ public static partial class ColumnValueParser
         => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value);
 
     /// <summary>
-    /// 提取文本中的第一个数字及其紧随的单位。
+    /// 完整解析「可选 ≈ 前缀 + 数字 + 可选单位」的文本。
     /// </summary>
     /// <param name="text">列文本。</param>
     /// <param name="value">数字。</param>
     /// <param name="unit">单位；没有单位时为 null。</param>
-    /// <returns>找到数字返回 true。</returns>
-    private static bool TryExtractFirstNumber(string? text, out double value, out string? unit)
+    /// <returns>整段文本都合法时返回 true。</returns>
+    /// <remarks>
+    /// 必须整段匹配：逗号小数（<c>1,2 MB</c>）、重复小数点（<c>1.2.3 MB</c>）、
+    /// 负号（含 <c>≈ -1 MB</c> 这类前缀负号）与尾部垃圾都视为解析失败，
+    /// 不能从中间截一个数字出来当有效值。
+    /// </remarks>
+    private static bool TryParseQuantityText(string? text, out double value, out string? unit)
     {
-        value = 0;
+        value = 0d;
         unit = null;
 
-        if (string.IsNullOrWhiteSpace(text) || text.TrimStart().StartsWith('-'))
+        if (string.IsNullOrWhiteSpace(text))
         {
             return false;
         }
@@ -429,8 +502,10 @@ public static partial class ColumnValueParser
                 match.Groups["value"].Value,
                 NumberStyles.Float,
                 CultureInfo.InvariantCulture,
-                out value))
+                out value)
+            || !double.IsFinite(value))
         {
+            value = 0d;
             return false;
         }
 
@@ -438,12 +513,12 @@ public static partial class ColumnValueParser
         return true;
     }
 
-    [GeneratedRegex(@"(?<value>\d+(?:\.\d+)?)\s*(?<unit>[A-Za-z]+|片|%)?")]
+    [GeneratedRegex(@"^\s*(?:≈\s*)?(?<value>[0-9]+(?:\.[0-9]+)?)\s*(?<unit>[A-Za-z]+|片|%)?\s*$")]
     private static partial Regex NumberPattern();
 
-    [GeneratedRegex(@"(?<done>\d+)\s*/\s*(?<total>\d+)\s*片")]
+    [GeneratedRegex(@"^\s*(?<done>[0-9]+)\s*/\s*(?<total>[0-9]+)\s*片\s*$")]
     private static partial Regex SegmentProgressPattern();
 
-    [GeneratedRegex(@"^(?<month>\d{1,2})-(?<day>\d{1,2})\s+(?<hour>\d{1,2}):(?<minute>\d{1,2})$")]
+    [GeneratedRegex(@"^(?<month>[0-9]{1,2})-(?<day>[0-9]{1,2})\s+(?<hour>[0-9]{1,2}):(?<minute>[0-9]{1,2})$")]
     private static partial Regex MonthDayPattern();
 }
