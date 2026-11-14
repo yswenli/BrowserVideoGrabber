@@ -76,10 +76,10 @@ public sealed class DownloadPane : UserControl
         BackColor = Color.FromArgb(250, 250, 250);
 
         _runningList = new BufferedListView { Dock = DockStyle.Fill };
-        _runningList.AddColumns(("标题", 200), ("进度", 80), ("速度", 90), ("已下载", 130), ("地址", 360));
+        _runningList.AddColumns(("标题", 200, null), ("进度", 80, null), ("速度", 90, null), ("已下载", 130, null), ("地址", 360, null));
 
         _finishedList = new BufferedListView { Dock = DockStyle.Fill };
-        _finishedList.AddColumns(("标题", 200), ("结果", 70), ("大小", 90), ("完成时间", 110), ("说明", 360));
+        _finishedList.AddColumns(("标题", 200, null), ("结果", 70, null), ("大小", 90, null), ("完成时间", 110, null), ("说明", 360, null));
 
         // 「正在下载」页签同时承载等待中 / 下载中 / 已暂停三种状态，
         // 这样被暂停或排队中的任务也能一眼看到，无需切换到另一个空标签

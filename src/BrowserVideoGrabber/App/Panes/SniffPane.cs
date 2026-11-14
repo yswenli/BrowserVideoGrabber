@@ -62,14 +62,14 @@ public sealed class SniffPane : UserControl
 
         _listView = new BufferedListView { Dock = DockStyle.Fill };
         _listView.AddColumns(
-            ("格式", 80),
-            ("分辨率", 90),
-            ("名称", 200),
-            ("时长", 70),
-            ("大小", 90),
-            ("来源", 70),
-            ("发现时间", 110),
-            ("地址", 420));
+            ("格式", 80, null),
+            ("分辨率", 90, null),
+            ("名称", 200, null),
+            ("时长", 70, null),
+            ("大小", 90, null),
+            ("来源", 70, null),
+            ("发现时间", 110, null),
+            ("地址", 420, null));
         _listView.DoubleClick += OnListDoubleClick;
         _listView.MouseUp += OnListMouseUp;
 

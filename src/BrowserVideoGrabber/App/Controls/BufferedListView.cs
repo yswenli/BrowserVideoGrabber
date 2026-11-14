@@ -22,25 +22,26 @@
 *
 *****************************************************************************/
 
+using System.Collections;
 using System.Diagnostics;
+
+using BrowserVideoGrabber.Core.Lists;
+using BrowserVideoGrabber.Core.Models;
 
 namespace BrowserVideoGrabber.App.Controls;
 
 /// <summary>
-/// 开启双缓冲的 <see cref="ListView"/>。
+/// 开启双缓冲的 <see cref="ListView"/>，并统一提供列拖动、点击排序与列布局持久化能力。
 /// </summary>
-/// <remarks>
-/// <para>
-/// WinForms 的 <c>ListView</c> 默认不启用双缓冲，而下载进度列每 200 毫秒就会改写一次文本，
-/// 高频重绘会产生肉眼可见的闪烁，长时间盯着会非常疲劳。
-/// </para>
-/// <para>
-/// <c>DoubleBuffered</c> 是受保护的属性，无法直接从外部设置，
-/// 因此通过派生类在构造函数中打开它，这是官方推荐的绕行方式。
-/// </para>
-/// </remarks>
 internal sealed class BufferedListView : ListView
 {
+    private readonly Dictionary<string, Func<string, IComparable?>> _keySelectors = new(StringComparer.Ordinal);
+
+    private string? _sortColumnName;
+    private int _sortColumnIndex = -1;
+    private bool _sortAscending = true;
+    private bool _suppressLayoutEvents;
+
     /// <summary>
     /// 初始化列表控件并开启双缓冲。
     /// </summary>
@@ -52,21 +53,152 @@ internal sealed class BufferedListView : ListView
         HideSelection = false;
         MultiSelect = false;
         GridLines = false;
-        HeaderStyle = ColumnHeaderStyle.Nonclickable;
+        HeaderStyle = ColumnHeaderStyle.Clickable;
+        AllowColumnReorder = true;
+
+        ColumnClick += OnColumnClick;
+        ColumnWidthChanged += OnColumnWidthChanged;
+        ColumnReordered += OnColumnReordered;
     }
 
     /// <summary>
-    /// 按「名称 + 宽度」批量创建列。
+    /// 列顺序或列宽发生变化。
     /// </summary>
-    /// <param name="columns">列定义：名称与宽度。</param>
-    public void AddColumns(params (string Name, int Width)[] columns)
+    /// <remarks>事件携带变化后的布局快照，订阅方负责防抖与持久化。</remarks>
+    public event EventHandler<ColumnLayout>? LayoutChanged;
+
+    /// <summary>
+    /// 按「名称 + 宽度 + 可选键选择器」批量创建列。
+    /// </summary>
+    /// <param name="columns">
+    /// 列定义。键选择器为 null 时按 <see cref="ColumnValueParser.ParseText"/> 排序。
+    /// </param>
+    public void AddColumns(params (string Name, int Width, Func<string, IComparable?>? Key)[] columns)
     {
         ArgumentNullException.ThrowIfNull(columns);
 
-        foreach (var (name, width) in columns)
+        foreach (var (name, width, key) in columns)
         {
-            Columns.Add(name, width);
+            var header = Columns.Add(name, width);
+            header.Tag = name;
+            _keySelectors[name] = key ?? ColumnValueParser.ParseText;
         }
+    }
+
+    /// <summary>
+    /// 读取当前列布局（按显示顺序）。
+    /// </summary>
+    /// <returns>列布局快照。</returns>
+    public ColumnLayout GetColumnLayout()
+    {
+        var layout = new ColumnLayout();
+
+        foreach (var column in Columns.Cast<ColumnHeader>().OrderBy(c => c.DisplayIndex))
+        {
+            layout.Columns.Add(new ColumnLayoutEntry
+            {
+                Name = column.Tag as string ?? column.Text,
+                Width = column.Width
+            });
+        }
+
+        return layout;
+    }
+
+    /// <summary>
+    /// 应用列布局：按列名匹配，文件多出的列忽略，文件缺失的列补在末尾。
+    /// </summary>
+    /// <param name="layout">布局；为 null 时不做任何事。</param>
+    public void ApplyColumnLayout(ColumnLayout? layout)
+    {
+        if (layout?.Columns is not { Count: > 0 })
+        {
+            return;
+        }
+
+        _suppressLayoutEvents = true;
+        try
+        {
+            var byName = Columns.Cast<ColumnHeader>()
+                .Where(c => c.Tag is string)
+                .ToDictionary(c => (string)c.Tag!, StringComparer.Ordinal);
+
+            var ordered = new List<ColumnHeader>();
+            var used = new HashSet<ColumnHeader>();
+
+            foreach (var entry in layout.Columns)
+            {
+                if (string.IsNullOrWhiteSpace(entry.Name)
+                    || !byName.TryGetValue(entry.Name, out var column)
+                    || !used.Add(column))
+                {
+                    continue;
+                }
+
+                if (entry.Width > 0)
+                {
+                    column.Width = entry.Width;
+                }
+
+                ordered.Add(column);
+            }
+
+            // 布局文件里没有的列（版本升级新增）按当前集合顺序补在末尾
+            foreach (var column in Columns.Cast<ColumnHeader>())
+            {
+                if (used.Add(column))
+                {
+                    ordered.Add(column);
+                }
+            }
+
+            for (var i = 0; i < ordered.Count; i++)
+            {
+                ordered[i].DisplayIndex = i;
+            }
+        }
+        finally
+        {
+            _suppressLayoutEvents = false;
+        }
+    }
+
+    /// <summary>
+    /// 按当前排序规则插入一行；未排序时按调用方指定的默认位置插入。
+    /// </summary>
+    /// <param name="item">已填好子项文本的行。</param>
+    /// <param name="insertAtTopWhenUnsorted">
+    /// 未排序时是否插到最上面。下载列表传 true（新任务在上），页面视频传 false（保持追加）。
+    /// </param>
+    public void InsertItemSorted(ListViewItem item, bool insertAtTopWhenUnsorted = true)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        if (_sortColumnName is null)
+        {
+            if (insertAtTopWhenUnsorted)
+            {
+                Items.Insert(0, item);
+            }
+            else
+            {
+                Items.Add(item);
+            }
+
+            return;
+        }
+
+        var index = 0;
+        for (; index < Items.Count; index++)
+        {
+            // 相等键插到相等段最前，保持「新在上」
+            if (CompareItems(item, Items[index]) <= 0)
+            {
+                break;
+            }
+        }
+
+        Items.Insert(index, item);
     }
 
     /// <summary>
@@ -118,5 +250,168 @@ internal sealed class BufferedListView : ListView
         {
             item.SubItems.Add(string.Empty);
         }
+    }
+
+    private void OnColumnClick(object? sender, ColumnClickEventArgs e)
+    {
+        if (e.Column < 0 || e.Column >= Columns.Count)
+        {
+            return;
+        }
+
+        var column = Columns[e.Column];
+        if (column.Tag is not string name || !_keySelectors.ContainsKey(name))
+        {
+            return;
+        }
+
+        if (string.Equals(_sortColumnName, name, StringComparison.Ordinal))
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumnName = name;
+            _sortAscending = true;
+        }
+
+        ApplySort();
+    }
+
+    private void ApplySort()
+    {
+        if (_sortColumnName is null)
+        {
+            return;
+        }
+
+        _sortColumnIndex = FindColumnIndex(_sortColumnName);
+        UpdateSortIndicators();
+
+        // 设置 sorter 会立即排序；排完立刻清空，避免后续 Items.Add 被自动排序插入
+        ListViewItemSorter = new ItemComparer(this);
+        Sort();
+        ListViewItemSorter = null;
+    }
+
+    private int FindColumnIndex(string name)
+    {
+        for (var i = 0; i < Columns.Count; i++)
+        {
+            if (string.Equals(Columns[i].Tag as string, name, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private int CompareItems(ListViewItem left, ListViewItem right)
+    {
+        if (_sortColumnName is null || _sortColumnIndex < 0)
+        {
+            return 0;
+        }
+
+        var keySelector = _keySelectors[_sortColumnName];
+        var leftKey = keySelector(GetSubItemText(left, _sortColumnIndex));
+        var rightKey = keySelector(GetSubItemText(right, _sortColumnIndex));
+
+        if (leftKey is null || rightKey is null)
+        {
+            // 解析失败一律排末尾，不随升降序翻转
+            if (leftKey is null && rightKey is null)
+            {
+                return 0;
+            }
+
+            return leftKey is null ? 1 : -1;
+        }
+
+        var result = CompareKeys(leftKey, rightKey);
+        return _sortAscending ? result : -result;
+    }
+
+    private static string GetSubItemText(ListViewItem item, int index)
+        => index < item.SubItems.Count ? item.SubItems[index].Text : string.Empty;
+
+    private static int CompareKeys(IComparable left, IComparable right)
+    {
+        if (left is string leftText && right is string rightText)
+        {
+            return StringComparer.OrdinalIgnoreCase.Compare(leftText, rightText);
+        }
+
+        try
+        {
+            return left.CompareTo(right);
+        }
+        catch (ArgumentException)
+        {
+            // 极端情况下同一列混入不同类型（例如手工改坏的持久化数据），退化为文本比较
+            return StringComparer.OrdinalIgnoreCase.Compare(left.ToString(), right.ToString());
+        }
+    }
+
+    private void UpdateSortIndicators()
+    {
+        foreach (var column in Columns.Cast<ColumnHeader>())
+        {
+            if (column.Tag is not string name)
+            {
+                continue;
+            }
+
+            var arrow = string.Equals(name, _sortColumnName, StringComparison.Ordinal)
+                ? _sortAscending ? " ▲" : " ▼"
+                : string.Empty;
+
+            var text = name + arrow;
+            if (!string.Equals(column.Text, text, StringComparison.Ordinal))
+            {
+                column.Text = text;
+            }
+        }
+    }
+
+    private void OnColumnWidthChanged(object? sender, ColumnWidthChangedEventArgs e)
+    {
+        if (!_suppressLayoutEvents)
+        {
+            LayoutChanged?.Invoke(this, GetColumnLayout());
+        }
+    }
+
+    private void OnColumnReordered(object? sender, ColumnReorderedEventArgs e)
+    {
+        if (_suppressLayoutEvents)
+        {
+            return;
+        }
+
+        // 该事件在重排生效前触发，DisplayIndex 尚未更新；等消息循环处理完再读布局
+        if (IsHandleCreated)
+        {
+            BeginInvoke(() =>
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    LayoutChanged?.Invoke(this, GetColumnLayout());
+                }
+            });
+        }
+    }
+
+    private sealed class ItemComparer : IComparer
+    {
+        private readonly BufferedListView _owner;
+
+        public ItemComparer(BufferedListView owner) => _owner = owner;
+
+        public int Compare(object? x, object? y)
+            => x is ListViewItem left && y is ListViewItem right
+                ? _owner.CompareItems(left, right)
+                : 0;
     }
 }
