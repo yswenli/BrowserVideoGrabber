@@ -104,9 +104,17 @@ internal static class DisplayText
     /// 把下载速度格式化为便于阅读的文本。
     /// </summary>
     /// <param name="bytesPerSecond">每秒字节数。</param>
-    /// <returns>形如 <c>3.4 MB/s</c> 的文本；未知时返回 <c>-</c>。</returns>
+    /// <returns>形如 <c>3.4 MB/s</c> 的文本；未知或不足 1 字节/秒时返回 <c>-</c>。</returns>
     public static string Speed(double bytesPerSecond)
-        => bytesPerSecond <= 0 ? "-" : $"{Size((long)bytesPerSecond)}/s";
+    {
+        // 不足 1 B/s 时 (long) 会截断成 0，直接拼 "/s" 会产出 "-/s" 这种非法文本
+        if (!double.IsFinite(bytesPerSecond) || bytesPerSecond < 1d || bytesPerSecond > long.MaxValue)
+        {
+            return "-";
+        }
+
+        return $"{Size((long)bytesPerSecond)}/s";
+    }
 
     /// <summary>
     /// 把进度百分比格式化为文本。
@@ -141,7 +149,9 @@ internal static class DisplayText
     /// </remarks>
     public static string Duration(double? seconds)
     {
-        if (seconds is not > 0)
+        if (seconds is not > 0
+            || !double.IsFinite(seconds.Value)
+            || seconds.Value > TimeSpan.MaxValue.TotalSeconds)
         {
             return "-";
         }

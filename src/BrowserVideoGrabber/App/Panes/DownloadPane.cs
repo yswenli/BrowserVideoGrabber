@@ -413,10 +413,16 @@ public sealed class DownloadPane : UserControl
         if (progress?.Processed is { } processed)
         {
             var total = progress.Total;
-            var totalText = total is { } totalValue
+            var totalText = total is { TotalSeconds: > 0 } totalValue
                 ? DisplayText.Duration(totalValue.TotalSeconds)
                 : "未知";
-            return $"{DisplayText.Duration(processed.TotalSeconds)} / {totalText}";
+
+            // 刚启动时已处理时长为 0；此时必须显示 00:00（比例 0），
+            // 不能复用 Duration(0) 的 "-"（那会被解析成「未知」而排到末尾）
+            var processedText = processed.TotalSeconds > 0
+                ? DisplayText.Duration(processed.TotalSeconds)
+                : "00:00";
+            return $"{processedText} / {totalText}";
         }
 
         // 原生 HTTP 链路：字节进度，progress 缺失时回退任务快照
@@ -424,7 +430,11 @@ public sealed class DownloadPane : UserControl
         var totalText2 = progress?.TotalBytes is > 0
             ? DisplayText.Size(progress.TotalBytes.Value)
             : "未知";
-        return $"{DisplayText.Size(downloaded)} / {totalText2}";
+
+        // 0 字节是已知的零值；DisplayText.Size(0) 的 "-" 表示「未知」，
+        // 直接复用会让刚启动的任务在「已下载」列被当成未知排到末尾
+        var downloadedText = downloaded > 0 ? DisplayText.Size(downloaded) : "0 B";
+        return $"{downloadedText} / {totalText2}";
     }
 
     /// <summary>
