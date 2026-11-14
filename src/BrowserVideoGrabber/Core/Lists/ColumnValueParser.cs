@@ -31,8 +31,19 @@ namespace BrowserVideoGrabber.Core.Lists;
 /// 列表列文本的解析工具：把界面上的可读文本转换为可比较的键。
 /// </summary>
 /// <remarks>
+/// <para>
 /// 返回 <see langword="null"/> 表示「无法解析」，由列表控件统一排到末尾。
-/// 所有解析都按 InvariantCulture 处理，避免系统区域设置影响小数点。
+/// </para>
+/// <para>
+/// 每一列都必须使用<b>量纲一致</b>的解析方法：「大小」用 <see cref="ParseSize"/>（字节）、
+/// 「速度」用 <see cref="ParseSpeed"/>（字节/秒）、「进度」用 <see cref="ParseProgress"/>（百分比）、
+/// 「已下载」用 <see cref="ParseDownloaded"/>（完成比例）。不要把不同量纲的值混进同一列比较 ——
+/// 那会让排序结果失去业务含义。
+/// </para>
+/// <para>
+/// 所有数字解析都按 <see cref="CultureInfo.InvariantCulture"/> 处理，界面文本也必须用不变文化格式化，
+/// 否则德语等以逗号作小数点的区域会把 <c>1,2 MB</c> 解析成 <c>1</c>。
+/// </para>
 /// </remarks>
 public static partial class ColumnValueParser
 {
@@ -41,31 +52,118 @@ public static partial class ColumnValueParser
     private const double Gigabyte = Megabyte * 1024d;
     private const double Terabyte = Gigabyte * 1024d;
 
-    /// <summary>普通文本：空串与 <c>-</c> 视为无效值。</summary>
+    /// <summary>
+    /// 解析普通文本。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <returns>
+    /// 去掉首尾空白后的文本；空白、<c>-</c>、<c>—</c>、<c>–</c> 返回 <see langword="null"/>。
+    /// </returns>
     public static IComparable? ParseText(string? text)
-        => string.IsNullOrWhiteSpace(text) || text == "-" ? null : text;
-
-    /// <summary>解析带单位的数量（体积、速度、百分比、片数、倍率）。</summary>
-    public static IComparable? ParseQuantity(string? text)
     {
-        if (!TryExtractFirstNumber(text, out var value, out var unit))
+        if (string.IsNullOrWhiteSpace(text))
         {
             return null;
         }
 
-        var multiplier = unit?.ToUpperInvariant() switch
+        var trimmed = text.Trim();
+        return trimmed is "-" or "—" or "–" ? null : trimmed;
+    }
+
+    /// <summary>
+    /// 解析体积文本（字节数）。
+    /// </summary>
+    /// <param name="text">列文本，如 <c>12.5 MB</c>、<c>≈ 1.2 GB</c>、<c>512 B</c>。</param>
+    /// <returns>
+    /// 字节数；含 <c>/</c>（如 <c>12 / 30 片</c>）或无法解析时返回 <see langword="null"/>。
+    /// </returns>
+    public static IComparable? ParseSize(string? text) => ParseSizeValue(text);
+
+    /// <summary>
+    /// 解析速度文本（字节/秒）。
+    /// </summary>
+    /// <param name="text">列文本，如 <c>3.4 MB/s</c>。</param>
+    /// <returns>
+    /// 字节/秒；<c>1.2x</c> 这类倍率、<c>-</c> 与无法解析时返回 <see langword="null"/>。
+    /// </returns>
+    /// <remarks>倍率与字节速率没有可比性，因此只接受带 <c>/s</c> 后缀的文本。</remarks>
+    public static IComparable? ParseSpeed(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
         {
-            "KB" => Kilobyte,
-            "MB" => Megabyte,
-            "GB" => Gigabyte,
-            "TB" => Terabyte,
-            _ => 1d
-        };
+            return null;
+        }
+
+        var trimmed = text.Trim();
+        return trimmed.EndsWith("/s", StringComparison.OrdinalIgnoreCase)
+            ? ParseSizeValue(trimmed[..^2])
+            : null;
+    }
+
+    /// <summary>
+    /// 解析进度文本，统一换算成 0~100 的百分比。
+    /// </summary>
+    /// <param name="text">列文本，如 <c>45.0%</c>、<c>12 / 30 片</c>。</param>
+    /// <returns>
+    /// 百分比；<c>计算中…</c>、<c>等待中</c> 等状态文字返回 <see langword="null"/>。
+    /// </returns>
+    /// <remarks>
+    /// 分片进度显示的是「已完成片数 / 总片数」，与百分比不是同一量纲，
+    /// 必须先换算成百分比，否则 <c>30 / 30 片</c> 会排在 <c>45.0%</c> 后面。
+    /// </remarks>
+    public static IComparable? ParseProgress(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var trimmed = text.Trim();
+
+        if (trimmed.EndsWith('%'))
+        {
+            return ParseQuantity(trimmed);
+        }
+
+        var match = SegmentProgressPattern().Match(trimmed);
+        if (!match.Success
+            || !TryParsePart(match.Groups["done"].Value, out var done)
+            || !TryParsePart(match.Groups["total"].Value, out var total)
+            || total <= 0)
+        {
+            return null;
+        }
+
+        return Math.Clamp(done * 100d / total, 0d, 100d);
+    }
+
+    /// <summary>
+    /// 解析带单位的数量（体积、速度、百分比、片数、倍率）。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <returns>按单位换算后的数值；未知单位或无法解析时返回 <see langword="null"/>。</returns>
+    /// <remarks>
+    /// 这是通用解析器。具体列应优先使用 <see cref="ParseSize"/> / <see cref="ParseSpeed"/> /
+    /// <see cref="ParseProgress"/> / <see cref="ParseDownloaded"/>，避免量纲混排。
+    /// </remarks>
+    public static IComparable? ParseQuantity(string? text)
+    {
+        if (!TryExtractFirstNumber(text, out var value, out var unit)
+            || !TryGetMultiplier(unit, out var multiplier))
+        {
+            return null;
+        }
 
         return value * multiplier;
     }
 
-    /// <summary>解析 <c>mm:ss</c> / <c>h:mm:ss</c> 形式的时长。</summary>
+    /// <summary>
+    /// 解析 <c>mm:ss</c> / <c>h:mm:ss</c> 形式的时长。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <returns>
+    /// 时长；格式非法或超出 <see cref="TimeSpan.MaxValue"/> 时返回 <see langword="null"/>。
+    /// </returns>
     public static IComparable? ParseDuration(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -73,52 +171,122 @@ public static partial class ColumnValueParser
             return null;
         }
 
-        var parts = text.Split(':');
-        if (parts.Length is < 2 or > 3)
-        {
-            return null;
-        }
-
-        if (!int.TryParse(parts[^1], NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
-            || !int.TryParse(parts[^2], NumberStyles.None, CultureInfo.InvariantCulture, out var minutes)
-            || seconds is < 0 or > 59
-            || minutes < 0)
+        var parts = text.Trim().Split(':');
+        if (parts.Length is < 2 or > 3
+            || !TryParsePart(parts[^1], out var seconds)
+            || !TryParsePart(parts[^2], out var minutes)
+            || seconds > 59)
         {
             return null;
         }
 
         var hours = 0;
-        if (parts.Length == 3
-            && (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out hours) || hours < 0))
+        if (parts.Length == 3 && !TryParsePart(parts[0], out hours))
         {
             return null;
         }
 
-        return TimeSpan.FromHours(hours) + TimeSpan.FromMinutes(minutes) + TimeSpan.FromSeconds(seconds);
+        var totalSeconds = (hours * 3600d) + (minutes * 60d) + seconds;
+        return totalSeconds > TimeSpan.MaxValue.TotalSeconds ? null : TimeSpan.FromSeconds(totalSeconds);
     }
 
-    /// <summary>解析 <c>HH:mm:ss</c> 形式的时刻（发现时间列）。</summary>
-    public static IComparable? ParseClock(string? text) => ParseDuration(text);
-
-    /// <summary>解析 <c>MM-dd HH:mm</c> 形式的完成时间。</summary>
-    public static IComparable? ParseMonthDay(string? text)
+    /// <summary>
+    /// 解析 <c>HH:mm:ss</c> 形式的时刻（发现时间列）。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <returns>
+    /// 时刻；不是严格的三段式（小时 0~23、分秒 0~59）时返回 <see langword="null"/>。
+    /// </returns>
+    public static IComparable? ParseClock(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return null;
         }
 
-        return DateTime.TryParseExact(
-            text,
-            "MM-dd HH:mm",
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.None,
-            out var value)
-            ? value
-            : null;
+        var parts = text.Trim().Split(':');
+        if (parts.Length != 3
+            || !TryParsePart(parts[0], out var hours)
+            || !TryParsePart(parts[1], out var minutes)
+            || !TryParsePart(parts[2], out var seconds)
+            || hours > 23
+            || minutes > 59
+            || seconds > 59)
+        {
+            return null;
+        }
+
+        return new TimeSpan(hours, minutes, seconds);
     }
 
-    /// <summary>解析「已下载」复合文本，取 <c>/</c> 前半段。</summary>
+    /// <summary>
+    /// 解析 <c>MM-dd HH:mm</c> 形式的完成时间（文本不含年份）。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <returns>不晚于当前时间的最近一次出现；无法解析时返回 <see langword="null"/>。</returns>
+    /// <remarks>任务会跨年持久化，因此不能简单补当前年份：12-31 的任务在次年 1 月应落在上一年。</remarks>
+    public static IComparable? ParseMonthDay(string? text) => ParseMonthDay(text, DateTime.Now);
+
+    /// <summary>
+    /// 解析 <c>MM-dd HH:mm</c> 形式的完成时间，并以指定时间为参考推断年份。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <param name="reference">参考时间，用于判断「最近一次出现」。</param>
+    /// <returns>
+    /// 不晚于 <paramref name="reference"/> 的最近一次出现；无法解析时返回 <see langword="null"/>。
+    /// </returns>
+    /// <remarks>该重载便于单元测试固定参考时间，生产代码使用无参重载。</remarks>
+    public static IComparable? ParseMonthDay(string? text, DateTime reference)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var match = MonthDayPattern().Match(text.Trim());
+        if (!match.Success
+            || !TryParsePart(match.Groups["month"].Value, out var month)
+            || !TryParsePart(match.Groups["day"].Value, out var day)
+            || !TryParsePart(match.Groups["hour"].Value, out var hour)
+            || !TryParsePart(match.Groups["minute"].Value, out var minute)
+            || month is < 1 or > 12
+            || day < 1
+            || hour > 23
+            || minute > 59)
+        {
+            return null;
+        }
+
+        // 文本没有年份：从参考年份向前找第一个合法且不晚于参考时间的日期，
+        // 这样 12-31 在次年 1 月会正确落到上一年，02-29 也能落到最近的闰年。
+        for (var year = reference.Year; year >= reference.Year - 8; year--)
+        {
+            if (day > DateTime.DaysInMonth(year, month))
+            {
+                continue;
+            }
+
+            var candidate = new DateTime(year, month, day, hour, minute, 0);
+            if (candidate <= reference)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 解析「已下载」复合文本，换算成完成比例。
+    /// </summary>
+    /// <param name="text">列文本，如 <c>12.5 MB / 100 MB</c>、<c>01:20 / 02:00</c>。</param>
+    /// <returns>
+    /// 0~1 的完成比例；总量未知（<c>/ 未知</c>）或无法解析时返回 <see langword="null"/>。
+    /// </returns>
+    /// <remarks>
+    /// 字节进度与时长进度量纲不同，不能直接比较；换算成比例后两者才可比。
+    /// 总量未知时宁可返回 <see langword="null"/> 排到末尾，也不要拿「已下载字节」与「比例」硬比。
+    /// </remarks>
     public static IComparable? ParseDownloaded(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -127,29 +295,130 @@ public static partial class ColumnValueParser
         }
 
         var slash = text.IndexOf('/');
-        var downloaded = (slash >= 0 ? text[..slash] : text).Trim();
-
-        if (downloaded.Length == 0)
+        if (slash < 0)
         {
             return null;
         }
 
-        // 时长进度（01:20 / 02:00）统一换算成秒，和字节进度一样返回 double，
-        // 避免同一列里 TimeSpan 与 double 混排时 CompareTo 抛异常
-        if (downloaded.Contains(':'))
-        {
-            return ParseDuration(downloaded) is TimeSpan duration ? duration.TotalSeconds : null;
-        }
+        var downloaded = ParseAmount(text[..slash].Trim());
+        var total = ParseAmount(text[(slash + 1)..].Trim());
 
-        return ParseQuantity(downloaded);
+        return downloaded is { } downloadedValue && total is { } totalValue && totalValue > 0d
+            ? Math.Clamp(downloadedValue / totalValue, 0d, 1d)
+            : null;
     }
 
+    /// <summary>
+    /// 解析「已下载」中的单侧数值：带冒号按时长（秒），否则按体积（字节）。
+    /// </summary>
+    /// <param name="text">单侧文本。</param>
+    /// <returns>秒或字节；无法解析时返回 <see langword="null"/>。</returns>
+    private static double? ParseAmount(string text)
+        => text.Contains(':')
+            ? ParseDuration(text) is TimeSpan duration ? duration.TotalSeconds : null
+            : ParseSizeValue(text);
+
+    /// <summary>
+    /// 解析纯体积文本为字节数。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <returns>字节数；含 <c>/</c>、未知单位或无法解析时返回 <see langword="null"/>。</returns>
+    private static double? ParseSizeValue(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)
+            || text.Contains('/')
+            || !TryExtractFirstNumber(text, out var value, out var unit)
+            || !TryGetSizeMultiplier(unit, out var multiplier))
+        {
+            return null;
+        }
+
+        return value * multiplier;
+    }
+
+    /// <summary>
+    /// 获取体积单位的换算倍数。
+    /// </summary>
+    /// <param name="unit">单位文本。</param>
+    /// <param name="multiplier">换算倍数。</param>
+    /// <returns>单位受支持返回 true；未知单位返回 false。</returns>
+    private static bool TryGetSizeMultiplier(string? unit, out double multiplier)
+    {
+        switch (unit?.ToUpperInvariant())
+        {
+            case null or "" or "B":
+                multiplier = 1d;
+                return true;
+
+            case "KB":
+                multiplier = Kilobyte;
+                return true;
+
+            case "MB":
+                multiplier = Megabyte;
+                return true;
+
+            case "GB":
+                multiplier = Gigabyte;
+                return true;
+
+            case "TB":
+                multiplier = Terabyte;
+                return true;
+
+            default:
+                multiplier = 0d;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// 获取通用数量单位的换算倍数（体积单位 + 无量纲单位）。
+    /// </summary>
+    /// <param name="unit">单位文本。</param>
+    /// <param name="multiplier">换算倍数。</param>
+    /// <returns>单位受支持返回 true；未知单位返回 false。</returns>
+    private static bool TryGetMultiplier(string? unit, out double multiplier)
+    {
+        if (TryGetSizeMultiplier(unit, out multiplier))
+        {
+            return true;
+        }
+
+        switch (unit?.ToUpperInvariant())
+        {
+            case "X" or "%" or "片":
+                multiplier = 1d;
+                return true;
+
+            default:
+                multiplier = 0d;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// 解析一个非负整数片段。
+    /// </summary>
+    /// <param name="text">片段文本。</param>
+    /// <param name="value">解析结果。</param>
+    /// <returns>解析成功返回 true。</returns>
+    private static bool TryParsePart(string text, out int value)
+        => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value);
+
+    /// <summary>
+    /// 提取文本中的第一个数字及其紧随的单位。
+    /// </summary>
+    /// <param name="text">列文本。</param>
+    /// <param name="value">数字。</param>
+    /// <param name="unit">单位；没有单位时为 null。</param>
+    /// <returns>找到数字返回 true。</returns>
     private static bool TryExtractFirstNumber(string? text, out double value, out string? unit)
     {
         value = 0;
         unit = null;
 
-        if (string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(text) || text.TrimStart().StartsWith('-'))
         {
             return false;
         }
@@ -171,4 +440,10 @@ public static partial class ColumnValueParser
 
     [GeneratedRegex(@"(?<value>\d+(?:\.\d+)?)\s*(?<unit>[A-Za-z]+|片|%)?")]
     private static partial Regex NumberPattern();
+
+    [GeneratedRegex(@"(?<done>\d+)\s*/\s*(?<total>\d+)\s*片")]
+    private static partial Regex SegmentProgressPattern();
+
+    [GeneratedRegex(@"^(?<month>\d{1,2})-(?<day>\d{1,2})\s+(?<hour>\d{1,2}):(?<minute>\d{1,2})$")]
+    private static partial Regex MonthDayPattern();
 }
