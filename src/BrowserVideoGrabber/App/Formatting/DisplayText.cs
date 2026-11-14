@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using System.Globalization;
+
 using BrowserVideoGrabber.Core.Models;
 
 namespace BrowserVideoGrabber.App.Formatting;
@@ -32,6 +34,8 @@ namespace BrowserVideoGrabber.App.Formatting;
 /// <remarks>
 /// 把「枚举 / 字节数 / 速度」到「中文字符串」的转换集中在一处，
 /// 避免同一个状态在三个页签里被写成三种不同的说法。
+/// 数字与日期一律用 <see cref="CultureInfo.InvariantCulture"/> 格式化：
+/// 列表排序会把这些文本解析回数值，若随系统区域变化（如德语 <c>1,2 MB</c>）就会解析错误。
 /// </remarks>
 internal static class DisplayText
 {
@@ -91,7 +95,9 @@ internal static class DisplayText
         }
 
         // 字节量级直接显示整数，避免出现 "512.00 B" 这种别扭写法
-        return unit == 0 ? $"{bytes} B" : $"{value:0.##} {SizeUnits[unit]}";
+        return unit == 0
+            ? $"{bytes} B"
+            : $"{value.ToString("0.##", CultureInfo.InvariantCulture)} {SizeUnits[unit]}";
     }
 
     /// <summary>
@@ -109,7 +115,9 @@ internal static class DisplayText
     /// <param name="hasTotal">是否已知总量。</param>
     /// <returns>已知总量时为百分比，否则为 <c>未知</c>。</returns>
     public static string Percent(double percent, bool hasTotal)
-        => hasTotal ? $"{Math.Clamp(percent, 0d, 100d):0.0}%" : "计算中…";
+        => hasTotal
+            ? Math.Clamp(percent, 0d, 100d).ToString("0.0", CultureInfo.InvariantCulture) + "%"
+            : "计算中…";
 
     /// <summary>
     /// 把时间格式化为短文本。
@@ -117,7 +125,7 @@ internal static class DisplayText
     /// <param name="time">时间；为空返回 <c>-</c>。</param>
     /// <returns>形如 <c>09-13 01:20</c> 的文本。</returns>
     public static string Time(DateTimeOffset? time)
-        => time.HasValue ? time.Value.ToString("MM-dd HH:mm") : "-";
+        => time.HasValue ? time.Value.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture) : "-";
 
     /// <summary>
     /// 把视频时长（秒）格式化为可读文本。

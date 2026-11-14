@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using System.Globalization;
+
 using BrowserVideoGrabber.App.Controls;
 using BrowserVideoGrabber.App.Formatting;
 using BrowserVideoGrabber.Core.Models;
@@ -377,7 +379,7 @@ public sealed class DownloadPane : UserControl
 
         if (progress.SpeedMultiplier > 0)
         {
-            return $"{progress.SpeedMultiplier:0.0}x";
+            return progress.SpeedMultiplier.ToString("0.0", CultureInfo.InvariantCulture) + "x";
         }
 
         return DisplayText.Speed(progress.BytesPerSecond);

@@ -22,6 +22,7 @@
 *
 *****************************************************************************/
 
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 using BrowserVideoGrabber.App.Controls;
@@ -151,7 +152,7 @@ public sealed class SniffPane : UserControl
         item.SubItems.Add(DisplayText.Duration(video.DurationSeconds));
         item.SubItems.Add(ToSizeText(video));
         item.SubItems.Add(ToSourceText(video.Source));
-        item.SubItems.Add(video.DetectedAt.ToString("HH:mm:ss"));
+        item.SubItems.Add(video.DetectedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture));
         item.SubItems.Add(string.IsNullOrWhiteSpace(video.NormalizedUrl) ? video.Url : video.NormalizedUrl);
         item.ToolTipText = video.Url;
 
@@ -242,7 +243,7 @@ public sealed class SniffPane : UserControl
         BufferedListView.SetSubItemText(item, 3, DisplayText.Duration(video.DurationSeconds));
         BufferedListView.SetSubItemText(item, 4, ToSizeText(video));
         BufferedListView.SetSubItemText(item, 5, ToSourceText(video.Source));
-        BufferedListView.SetSubItemText(item, 6, video.DetectedAt.ToString("HH:mm:ss"));
+        BufferedListView.SetSubItemText(item, 6, video.DetectedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture));
         BufferedListView.SetSubItemText(
             item,
             7,
