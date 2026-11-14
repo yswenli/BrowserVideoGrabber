@@ -146,8 +146,11 @@ public sealed class SniffPaneTests
             var list = ListOf(pane);
             Assert.True(list.IsHandleCreated, "排序插入测试需要有句柄的列表");
 
-            pane.AddOrUpdate(CreateVideo(pageTitle: "H", url: "https://example.com/h.mp4", durationSeconds: 7200));
-            pane.AddOrUpdate(CreateVideo(pageTitle: "M", url: "https://example.com/m.mp4", durationSeconds: 754));
+            // 取值刻意让「数值序」与「文本序」相反：
+            // 3540s → 59:00，3600s → 1:00:00。若时长列漏绑 ParseDuration，
+            // 按文本比较会把 1:00:00 排在 59:00 前面，本用例就会失败。
+            pane.AddOrUpdate(CreateVideo(pageTitle: "H", url: "https://example.com/h.mp4", durationSeconds: 3600));
+            pane.AddOrUpdate(CreateVideo(pageTitle: "M", url: "https://example.com/m.mp4", durationSeconds: 3540));
             pane.AddOrUpdate(CreateVideo(pageTitle: "S", url: "https://example.com/s.mp4", durationSeconds: 120));
 
             ClickColumn(list, 3);
@@ -156,7 +159,7 @@ public sealed class SniffPaneTests
             Assert.Equal("时长 ▲", list.Columns[3].Text);
 
             // 已排序时新行按当前排序键插入正确位置，而不是追加末尾
-            pane.AddOrUpdate(CreateVideo(pageTitle: "X", url: "https://example.com/x.mp4", durationSeconds: 600));
+            pane.AddOrUpdate(CreateVideo(pageTitle: "X", url: "https://example.com/x.mp4", durationSeconds: 3000));
 
             Assert.Equal(new[] { "S", "X", "M", "H" }, Titles(list));
         });
