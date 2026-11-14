@@ -590,8 +590,8 @@ internal sealed class BufferedListView : ListView
             {
                 BeginInvoke(() =>
                 {
-                    // 重排事件已投递、回调尚未执行期间，调用方可能刚好应用了一份布局；
-                    // 此时抑制标志已恢复，快照也已过期，直接丢弃这次通知。
+                    // 若这段时间里刚好应用过一份布局，回调会读到那份「当前布局」并多发一次通知
+                    // （内容一致，只是冗余）。这里用抑制标志避免在布局应用期间插入冗余通知。
                     if (!_suppressLayoutEvents && !IsDisposed && !Disposing && IsHandleCreated)
                     {
                         LayoutChanged?.Invoke(this, GetColumnLayout());

@@ -27,6 +27,7 @@ using System.Runtime.InteropServices;
 
 using BrowserVideoGrabber.App.Controls;
 using BrowserVideoGrabber.App.Formatting;
+using BrowserVideoGrabber.Core.Lists;
 using BrowserVideoGrabber.Core.Models;
 using BrowserVideoGrabber.Infrastructure.Sniffing;
 
@@ -53,6 +54,9 @@ public sealed class SniffPane : UserControl
     private readonly Dictionary<Guid, ListViewItem> _itemsById = new();
     private readonly ContextMenuStrip _contextMenu;
 
+    /// <summary>本列表在 column-layouts.json 中的键。</summary>
+    public const string LayoutKey = "sniff";
+
     /// <summary>
     /// 初始化嗅探面板。
     /// </summary>
@@ -61,15 +65,21 @@ public sealed class SniffPane : UserControl
         BackColor = Color.FromArgb(250, 250, 250);
 
         _listView = new BufferedListView { Dock = DockStyle.Fill };
+        // 「发现时间」列只显示 HH:mm:ss，排序键也按当天时刻比较；
+        // 跨午夜后（23:59:59 与次日 00:01:00）不再保证真实时间先后，这是有意的取舍：
+        // 列宽有限、且单次浏览会话极少跨越午夜。若将来需要严格时间序，
+        // 应改为在列中显示日期并换用能解析完整日期时间的键。
         _listView.AddColumns(
+            ("名称", 200, null),
             ("格式", 80, null),
             ("分辨率", 90, null),
-            ("名称", 200, null),
-            ("时长", 70, null),
-            ("大小", 90, null),
+            ("时长", 70, ColumnValueParser.ParseDuration),
+            ("大小", 90, ColumnValueParser.ParseSize),
             ("来源", 70, null),
-            ("发现时间", 110, null),
+            ("发现时间", 110, ColumnValueParser.ParseClock),
             ("地址", 420, null));
+        _listView.LayoutChanged += (_, layout) =>
+            LayoutChanged?.Invoke(this, new ColumnLayoutChangedEventArgs(LayoutKey, layout));
         _listView.DoubleClick += OnListDoubleClick;
         _listView.MouseUp += OnListMouseUp;
 
@@ -127,8 +137,30 @@ public sealed class SniffPane : UserControl
     /// </remarks>
     public event EventHandler? ClearRequested;
 
+    /// <summary>列顺序或列宽变化。</summary>
+    /// <remarks>
+    /// <para>
+    /// 拖动列宽时每变化一个像素就会触发一次，订阅方必须自行防抖后再持久化；
+    /// 程序化调用 <see cref="ApplyColumnLayout"/> 期间不会触发。
+    /// </para>
+    /// <para>事件在 UI 线程触发（<see cref="BufferedListView"/> 的约定）。</para>
+    /// </remarks>
+    public event EventHandler<ColumnLayoutChangedEventArgs>? LayoutChanged;
+
     /// <summary>列表中当前的资源数量。</summary>
     public int ItemCount => _itemsById.Count;
+
+    /// <summary>
+    /// 应用持久化的列布局。
+    /// </summary>
+    /// <param name="layout">布局；为 null 时不做任何修改，保持当前列序。</param>
+    public void ApplyColumnLayout(ColumnLayout? layout) => _listView.ApplyColumnLayout(layout);
+
+    /// <summary>
+    /// 读取当前列布局。
+    /// </summary>
+    /// <returns>列布局快照。</returns>
+    public ColumnLayout GetColumnLayout() => _listView.GetColumnLayout();
 
     /// <summary>
     /// 新增或刷新一条嗅探结果。
@@ -139,16 +171,19 @@ public sealed class SniffPane : UserControl
         ArgumentNullException.ThrowIfNull(video);
 
         // 同一条资源可能被网络监听与 JS 注入同时捕获，
-        // 此时用更完整的一条覆盖（例如网络链路能给出分辨率而 JS 链路不能）
+        // 此时用更完整的一条覆盖（例如网络链路能给出分辨率而 JS 链路不能）。
+        // 排序采用「快照式」语义：刷新只改文本、不移动已有行。因此若本次刷新改变了
+        // 当前排序列的键（例如时长从 "-" 补全为真实值），这一行会暂时偏离排序规则，
+        // 直到用户重新点击表头；这是设计取舍，换取进度类高频刷新时列表不跳动。
         if (_itemsById.TryGetValue(video.Id, out var existing))
         {
             ApplyFields(existing, video);
             return;
         }
 
-        var item = new ListViewItem(DisplayText.Format(video.Format)) { Tag = video };
+        var item = new ListViewItem(ToDisplayName(video)) { Tag = video };
+        item.SubItems.Add(DisplayText.Format(video.Format));
         item.SubItems.Add(video.Resolution ?? "-");
-        item.SubItems.Add(ToDisplayName(video));
         item.SubItems.Add(DisplayText.Duration(video.DurationSeconds));
         item.SubItems.Add(ToSizeText(video));
         item.SubItems.Add(ToSourceText(video.Source));
@@ -157,8 +192,11 @@ public sealed class SniffPane : UserControl
         item.ToolTipText = video.Url;
 
         _itemsById[video.Id] = item;
-        _listView.Items.Add(item);
-        _listView.EnsureVisible(_listView.Items.Count - 1);
+        _listView.InsertItemSorted(item, insertAtTopWhenUnsorted: false);
+
+        // 已排序时新行可能落在列表中部，这里仍主动滚动过去：
+        // 「新发现的资源必须立刻可见」的优先级高于保持用户当前视口位置。
+        item.EnsureVisible();
 
         SniffDiagnostics.Write($"pane row added; id={video.Id:N}; format={video.Format}; url={video.Url}; rows={_listView.Items.Count}");
 
@@ -237,9 +275,9 @@ public sealed class SniffPane : UserControl
     /// <param name="video">最新数据。</param>
     private static void ApplyFields(ListViewItem item, SniffedVideo video)
     {
-        BufferedListView.SetSubItemText(item, 0, DisplayText.Format(video.Format));
-        BufferedListView.SetSubItemText(item, 1, video.Resolution ?? "-");
-        BufferedListView.SetSubItemText(item, 2, ToDisplayName(video));
+        BufferedListView.SetSubItemText(item, 0, ToDisplayName(video));
+        BufferedListView.SetSubItemText(item, 1, DisplayText.Format(video.Format));
+        BufferedListView.SetSubItemText(item, 2, video.Resolution ?? "-");
         BufferedListView.SetSubItemText(item, 3, DisplayText.Duration(video.DurationSeconds));
         BufferedListView.SetSubItemText(item, 4, ToSizeText(video));
         BufferedListView.SetSubItemText(item, 5, ToSourceText(video.Source));
