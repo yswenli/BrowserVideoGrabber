@@ -51,6 +51,9 @@ public sealed class FakeFileSystem : IFileSystem
     /// <summary>设置后，<see cref="OpenWrite"/> 抛出该异常（模拟磁盘满或只读）。</summary>
     public Exception? OpenWriteException { get; set; }
 
+    /// <summary>最近一次 <see cref="OpenWrite"/> 传入的路径集合，用于断言临时文件名形态。</summary>
+    public List<string> OpenWritePaths { get; } = [];
+
     /// <summary>设置后，<see cref="CreateDirectory"/> 抛出该异常（模拟权限不足）。</summary>
     public Exception? CreateDirectoryException { get; set; }
 
@@ -135,6 +138,8 @@ public sealed class FakeFileSystem : IFileSystem
         {
             throw exception;
         }
+
+        OpenWritePaths.Add(path);
 
         // 追加模式以已有内容为基础构造可写流，写入完成后回写字典，模拟真实文件系统语义
         var existing = append && _files.TryGetValue(path, out var content) ? content : Array.Empty<byte>();

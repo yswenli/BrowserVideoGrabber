@@ -172,6 +172,48 @@ public sealed class ColumnLayoutStoreTests
     }
 
     [Fact]
+    public void Save_UsesUniqueTemporaryFileName()
+    {
+        var fileSystem = new FakeFileSystem();
+        var store = new ColumnLayoutStore(FilePath, fileSystem);
+
+        store.Save("sniff", new ColumnLayout
+        {
+            Columns = [new ColumnLayoutEntry { Name = "名称", Width = 200 }]
+        });
+
+        // 临时名必须是一次性 GUID，避免并发保存时互相移走对方的临时文件
+        var temporaryPath = Assert.Single(fileSystem.OpenWritePaths);
+        Assert.Matches(@"column-layouts\.json\.[0-9a-f]{32}\.tmp$", temporaryPath);
+    }
+
+    [Fact]
+    public void Save_WhenOpenWriteFails_DoesNotThrowAndLeavesNoTemporaryFile()
+    {
+        var fileSystem = new FakeFileSystem();
+        var store = new ColumnLayoutStore(FilePath, fileSystem);
+
+        store.Save("sniff", new ColumnLayout
+        {
+            Columns = [new ColumnLayoutEntry { Name = "名称", Width = 200 }]
+        });
+
+        fileSystem.OpenWriteException = new IOException("磁盘已满");
+
+        // 写临时文件失败时应静默吞掉，且不影响已保存内容
+        store.Save("download-running", new ColumnLayout
+        {
+            Columns = [new ColumnLayoutEntry { Name = "标题", Width = 300 }]
+        });
+
+        fileSystem.OpenWriteException = null;
+
+        Assert.Equal(200, Assert.Single(store.Load("sniff")!.Columns).Width);
+        Assert.Null(store.Load("download-running"));
+        Assert.DoesNotContain(fileSystem.FilePaths, path => path.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Save_WhenDirectoryCreationFails_DoesNotThrow()
     {
         var fileSystem = new FakeFileSystem
