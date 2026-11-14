@@ -92,6 +92,9 @@ public sealed class AppHost : IDisposable
         _historyFilePath = Path.Combine(settingsDirectory, "history.json");
         History = CreateHistoryRepository();
 
+        // 列布局与收藏/历史同目录，便于用户一次性备份或排查
+        ColumnLayouts = new ColumnLayoutStore(Path.Combine(settingsDirectory, "column-layouts.json"), _fileSystem);
+
         _httpClient = CreateHttpClient();
         _mediaFetcher = new HttpMediaFetcher(_httpClient, _fileSystem);
         FfmpegLocator = CreateFfmpegLocator();
@@ -110,6 +113,9 @@ public sealed class AppHost : IDisposable
     /// <summary>历史记录仓储。</summary>
     /// <remarks>设置变更（历史上限）时会被重建，因此不是只读属性。</remarks>
     public IHistoryRepository History { get; private set; }
+
+    /// <summary>列表列布局存储。</summary>
+    public ColumnLayoutStore ColumnLayouts { get; }
 
     /// <summary>ffmpeg 定位器。</summary>
     public FfmpegLocator FfmpegLocator { get; private set; }

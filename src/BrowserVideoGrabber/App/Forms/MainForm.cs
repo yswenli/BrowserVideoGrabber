@@ -72,6 +72,12 @@ public sealed class MainForm : Form
     private SniffListBinder? _sniffBinder;
     private DownloadListBinder? _downloadBinder;
 
+    /// <summary>列布局写盘防抖计时器：拖动列宽时每个像素都会触发一次事件，合并后再写。</summary>
+    private readonly System.Windows.Forms.Timer _columnLayoutSaveTimer = new() { Interval = 500 };
+
+    /// <summary>等待写盘的列布局，按列表键暂存最近一次快照。</summary>
+    private readonly Dictionary<string, ColumnLayout> _pendingColumnLayouts = new(StringComparer.Ordinal);
+
     /// <summary>
     /// 多标签嗅探协调器。
     /// </summary>
@@ -231,6 +237,10 @@ public sealed class MainForm : Form
 
         WireEvents();
 
+        // 先应用持久化布局，再让绑定器首次填充数据，避免用户看到一次「默认列序 → 自定义列序」的跳动
+        ApplySavedColumnLayouts();
+        WireColumnLayoutPersistence();
+
         _downloadBinder = new DownloadListBinder(_host, _downloadPane);
         _downloadBinder.RefreshAll();
 
@@ -325,6 +335,73 @@ public sealed class MainForm : Form
         _sniffPane.ClearRequested += OnSniffClearRequested;
 
         _downloadPane.ActionRequested += OnDownloadAction;
+    }
+
+    /// <summary>
+    /// 启动时应用持久化的列布局。
+    /// </summary>
+    /// <remarks>
+    /// 必须在 <c>DownloadListBinder.RefreshAll()</c> 填充数据前执行；
+    /// 即使晚于数据填充，WinForms 重排列时也会自动搬迁子项，但先布局可省去一次重绘。
+    /// </remarks>
+    private void ApplySavedColumnLayouts()
+    {
+        _sniffPane.ApplyColumnLayout(_host.ColumnLayouts.Load(SniffPane.LayoutKey));
+
+        _downloadPane.ApplyColumnLayout(
+            DownloadPane.RunningLayoutKey,
+            _host.ColumnLayouts.Load(DownloadPane.RunningLayoutKey));
+
+        _downloadPane.ApplyColumnLayout(
+            DownloadPane.FinishedLayoutKey,
+            _host.ColumnLayouts.Load(DownloadPane.FinishedLayoutKey));
+    }
+
+    /// <summary>
+    /// 订阅三个列表的布局变化，并用 500ms 防抖合并写盘。
+    /// </summary>
+    private void WireColumnLayoutPersistence()
+    {
+        _sniffPane.LayoutChanged += OnColumnLayoutChanged;
+        _downloadPane.LayoutChanged += OnColumnLayoutChanged;
+        _columnLayoutSaveTimer.Tick += OnColumnLayoutSaveTimerTick;
+    }
+
+    /// <summary>
+    /// 列布局变化：先暂存，等用户停手 500ms 后统一写盘。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">事件参数。</param>
+    private void OnColumnLayoutChanged(object? sender, ColumnLayoutChangedEventArgs e)
+    {
+        _pendingColumnLayouts[e.Key] = e.Layout;
+
+        _columnLayoutSaveTimer.Stop();
+        _columnLayoutSaveTimer.Start();
+    }
+
+    /// <summary>
+    /// 防抖计时器到点：写盘。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">事件参数。</param>
+    private void OnColumnLayoutSaveTimerTick(object? sender, EventArgs e)
+    {
+        _columnLayoutSaveTimer.Stop();
+        FlushColumnLayouts();
+    }
+
+    /// <summary>
+    /// 立即写入所有待保存的列布局。
+    /// </summary>
+    private void FlushColumnLayouts()
+    {
+        foreach (var (key, layout) in _pendingColumnLayouts)
+        {
+            _host.ColumnLayouts.Save(key, layout);
+        }
+
+        _pendingColumnLayouts.Clear();
     }
 
     /// <summary>
@@ -1158,6 +1235,10 @@ public sealed class MainForm : Form
 
         try
         {
+            // 用户拖完列立刻关窗时，防抖计时器可能还没触发；退出前强制写一次
+            _columnLayoutSaveTimer.Stop();
+            FlushColumnLayouts();
+
             _host.RememberLastUrl(_browserPane.CurrentUrl);
 
             // 保存会话标签供下次恢复（开关关闭时 SaveTabs 内部会直接跳过）
@@ -1196,6 +1277,8 @@ public sealed class MainForm : Form
             // 否则进程退出后任务栏通知区会残留一个无法点击的图标
             _notifyIcon?.Dispose();
             _trayMenu?.Dispose();
+
+            _columnLayoutSaveTimer.Dispose();
         }
 
         base.Dispose(disposing);
