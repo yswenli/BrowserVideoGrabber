@@ -44,6 +44,7 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     private readonly Dictionary<string, (byte[] Content, string ContentType)> _byteAndFile = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _failures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _failureMessages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _failureStatusCodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _callCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _failBeforeSucceed = new(StringComparer.OrdinalIgnoreCase);
 
@@ -86,10 +87,12 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     /// </summary>
     /// <param name="url">失败的 URL。</param>
     /// <param name="message">失败原因，用于断言上层是否把该原因透传到用户可见的提示里。</param>
-    public void FailWithMessage(string url, string message)
+    /// <param name="statusCode">HTTP 状态码；0 表示不模拟具体状态码。</param>
+    public void FailWithMessage(string url, string message, int statusCode = 0)
     {
         _failures.Add(url);
         _failureMessages[url] = message;
+        _failureStatusCodes[url] = statusCode;
     }
 
     /// <summary>
@@ -99,13 +102,22 @@ public sealed class FakeMediaFetcher : IMediaFetcher
     /// <param name="fallback">未预置原因时的兜底文案。</param>
     /// <returns>失败结果。</returns>
     private MediaFetchResult Failure(string url, string fallback)
-        => MediaFetchResult.Fail(_failureMessages.TryGetValue(url, out var message) ? message : fallback);
+        => MediaFetchResult.Fail(
+            _failureMessages.TryGetValue(url, out var message) ? message : fallback,
+            statusCode: _failureStatusCodes.TryGetValue(url, out var status) ? status : 0);
 
     /// <inheritdoc />
     public Task<MediaFetchResult> GetStringAsync(string url, RequestContext context, CancellationToken cancellationToken)
-        => Task.FromResult(_textResponses.TryGetValue(url, out var result)
+    {
+        if (_failures.Contains(url))
+        {
+            return Task.FromResult(Failure(url, $"文本获取失败：{url}"));
+        }
+
+        return Task.FromResult(_textResponses.TryGetValue(url, out var result)
             ? result
             : MediaFetchResult.Fail($"未预置文本响应：{url}"));
+    }
 
     /// <inheritdoc />
     public Task<MediaFetchResult> GetBytesAsync(string url, RequestContext context, CancellationToken cancellationToken)

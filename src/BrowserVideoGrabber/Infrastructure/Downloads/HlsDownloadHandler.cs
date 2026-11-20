@@ -143,6 +143,7 @@ public sealed class HlsDownloadHandler : IDownloadHandler
 
         // 1) 取顶层清单：主清单需再选一档清晰度取媒体清单
         var top = await FetchTextAsync(playlistUrl, task.Context, cancellationToken).ConfigureAwait(false);
+        var innerRejection = top.Ok ? 0 : top.StatusCode;
         if (!top.Ok && playlistUri != originalUri)
         {
             // 内层不可用（部分站点的包装层才是唯一带鉴权的入口）：退回包装地址
@@ -152,7 +153,10 @@ public sealed class HlsDownloadHandler : IDownloadHandler
 
         if (!top.Ok)
         {
-            return DownloadResult.Fail(top.Error, top.Retryable);
+            var detail = IsAuthRejected(innerRejection) && !IsAuthRejected(top.StatusCode)
+                ? $"真实清单地址返回 HTTP {innerRejection}（签名可能已过期），回退的包装地址也取不到清单。{top.Error}"
+                : top.Error;
+            return DownloadResult.Fail(WithAuthHint(detail, top.StatusCode == 0 ? innerRejection : top.StatusCode), top.Retryable);
         }
 
         var topPlaylist = M3u8Parser.Parse(top.Text!, playlistUri);
@@ -209,7 +213,7 @@ public sealed class HlsDownloadHandler : IDownloadHandler
 
         try
         {
-            return await DownloadSegmentsAsync(task, progress, cancellationToken, plan, workDirectory, assembledPath).ConfigureAwait(false);
+            return await DownloadSegmentsAsync(task, progress, cancellationToken, plan, workDirectory, assembledPath, innerRejection).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -238,6 +242,7 @@ public sealed class HlsDownloadHandler : IDownloadHandler
     /// <param name="plan">取片计划。</param>
     /// <param name="workDirectory">分片与中间产物工作目录。</param>
     /// <param name="assembledPath">拼接产物路径。</param>
+    /// <param name="innerRejection">内层真实清单返回的 401/403 状态码；0 表示未发生。</param>
     /// <returns>下载结果。</returns>
     /// <remarks>
     /// 从 <see cref="DownloadAsync"/> 中拆出，是为了给「取片及之后的异常」一个统一的清理兜底点：
@@ -250,7 +255,8 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         CancellationToken cancellationToken,
         HlsDownloadPlan plan,
         string workDirectory,
-        string assembledPath)
+        string assembledPath,
+        int innerRejection)
     {
         // 3) C# 逐片取片 + 校验 + 解密（每次下载新建下载器与校验器，见类型备注）
         var validator = new SegmentContentValidator();
@@ -269,10 +275,12 @@ public sealed class HlsDownloadHandler : IDownloadHandler
             // 引向重新嗅探，而真正要处理的是签名/密钥问题
             if (!string.IsNullOrEmpty(report.FatalError))
             {
-                return DownloadResult.Fail(report.FatalError!, isRetryable: false);
+                return DownloadResult.Fail(
+                    DescribeProxyFallback(innerRejection, report.FatalError!),
+                    isRetryable: false);
             }
 
-            return DownloadResult.Fail(BuildAllFailedDetail(report), isRetryable: false);
+            return DownloadResult.Fail(BuildAllFailedDetail(report, innerRejection), isRetryable: false);
         }
 
         // 4) 把成功分片按播放顺序裸拼为单个 TS
@@ -334,8 +342,8 @@ public sealed class HlsDownloadHandler : IDownloadHandler
     /// <param name="url">清单地址。</param>
     /// <param name="context">请求上下文。</param>
     /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>成功时 <see cref="Ok"/> 为 true 且携带文本；失败时携带中文错误与是否可重试。</returns>
-    private async Task<(bool Ok, string? Text, string Error, bool Retryable)> FetchTextAsync(
+    /// <returns>成功时 <see cref="Ok"/> 为 true 且携带文本；失败时携带中文错误、状态码与是否可重试。</returns>
+    private async Task<(bool Ok, string? Text, string Error, bool Retryable, int StatusCode)> FetchTextAsync(
         string url,
         RequestContext context,
         CancellationToken cancellationToken)
@@ -343,10 +351,10 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         var result = await _fetcher.GetStringAsync(url, context, cancellationToken).ConfigureAwait(false);
         if (result.Success && result.Text is not null)
         {
-            return (true, result.Text, string.Empty, true);
+            return (true, result.Text, string.Empty, true, result.StatusCode);
         }
 
-        return (false, null, result.Error ?? "获取播放列表失败。", result.IsRetryable);
+        return (false, null, result.Error ?? "获取播放列表失败。", result.IsRetryable, result.StatusCode);
     }
 
     /// <summary>
@@ -439,8 +447,47 @@ public sealed class HlsDownloadHandler : IDownloadHandler
     /// 构造「全部分片失败」的中文详情。
     /// </summary>
     /// <param name="report">分片下载报告。</param>
+    /// <param name="innerRejection">真实清单地址返回的 401/403 状态码；0 表示未发生。</param>
     /// <returns>面向用户的失败描述。</returns>
-    private static string BuildAllFailedDetail(HlsSegmentDownloadResult report)
+    private static string BuildAllFailedDetail(HlsSegmentDownloadResult report, int innerRejection)
+        => DescribeProxyFallback(innerRejection, DescribeAllFailed(report));
+
+    /// <summary>
+    /// 判断状态码是否属于「鉴权被拒」。
+    /// </summary>
+    /// <param name="statusCode">HTTP 状态码。</param>
+    /// <returns>401/403 时为 true。</returns>
+    private static bool IsAuthRejected(int statusCode)
+        => statusCode is 401 or 403;
+
+    /// <summary>
+    /// 鉴权被拒时补一句可执行的指引，避免用户只看到一句 HTTP 403。
+    /// </summary>
+    /// <param name="detail">原始失败描述。</param>
+    /// <param name="statusCode">最后一次失败的状态码。</param>
+    /// <returns>带指引的失败描述。</returns>
+    private static string WithAuthHint(string detail, int statusCode)
+        => IsAuthRejected(statusCode)
+            ? detail + " 该地址的签名可能已过期或被拒绝：请在页面按 F5 重新加载并播放视频后重新嗅探再下载。"
+            : detail;
+
+    /// <summary>
+    /// 内层真实清单被拒、回退到包装地址时，点明包装清单可能是过期缓存。
+    /// </summary>
+    /// <param name="innerRejection">真实清单地址返回的 401/403 状态码；0 表示未发生。</param>
+    /// <param name="detail">原始失败描述。</param>
+    /// <returns>带缓存提示的失败描述。</returns>
+    private static string DescribeProxyFallback(int innerRejection, string detail)
+        => IsAuthRejected(innerRejection)
+            ? $"真实清单地址返回 HTTP {innerRejection}（签名可能已过期），回退的包装清单可能是 CDN 缓存的过期副本。{detail}"
+            : detail;
+
+    /// <summary>
+    /// 构造「全部分片失败」的具体原因。
+    /// </summary>
+    /// <param name="report">分片下载报告。</param>
+    /// <returns>面向用户的失败描述。</returns>
+    private static string DescribeAllFailed(HlsSegmentDownloadResult report)
     {
         var total = report.TotalSegments;
 

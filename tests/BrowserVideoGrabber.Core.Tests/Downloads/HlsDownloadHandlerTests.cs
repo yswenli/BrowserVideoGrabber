@@ -396,6 +396,66 @@ public class HlsDownloadHandlerTests
     }
 
     /// <summary>
+    /// 清单本身被 401/403 拒绝时（签名过期或防盗链），提示必须指向「重新嗅探」，
+    /// 否则用户只会看到一句 HTTP 403，不知道下一步该做什么。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_PlaylistForbidden_ExplainsExpiredSignature()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        var url = "https://cdn.example.com/videos/movie.m3u8?auth_key=1795183800-065";
+
+        fetcher.FailWithMessage(
+            url,
+            "目标服务器拒绝访问（HTTP 403），通常为动态签名过期。",
+            statusCode: 403);
+
+        var handler = CreateHandler(fetcher, fs);
+        var task = CreateTask(url);
+
+        var result = await handler.DownloadAsync(task, new Progress<DownloadProgress>(), default);
+
+        Assert.False(result.Success);
+        Assert.Contains("403", result.Error!);
+        Assert.Contains("重新嗅探", result.Error!);
+    }
+
+    /// <summary>
+    /// 内层真实清单被 403 拒绝、回退到的包装清单又是 CDN 缓存副本时，
+    /// 最终失败文案必须点明「真实地址被拒 + 包装清单可能是过期缓存」，
+    /// 而不是只报一句密钥 403，让用户误以为换个密钥就好。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_ProxyInnerForbidden_FailureMentionsStaleProxyCache()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        var inner = "https://cdn.example.com/videos/movie.m3u8?auth_key=1795183800-065";
+        var proxy = "https://site.example.com/?url=" + Uri.EscapeDataString(inner);
+        var key = "https://cdn.example.com/videos/crypt.key?auth_key=1795180722-065";
+
+        fetcher.FailWithMessage(
+            inner,
+            "目标服务器拒绝访问（HTTP 403），通常为动态签名过期。",
+            statusCode: 403);
+
+        // 包装清单是 CDN 缓存的旧副本：里面的密钥签名同样已经过期
+        fetcher.SeedText(proxy, BuildAes128Playlist(key, ("https://cdn.example.com/videos/seg0.ts", 2.0)));
+        fetcher.FailWithMessage(key, "资源地址已失效（HTTP 403），通常为动态签名过期。", statusCode: 403);
+
+        var handler = CreateHandler(fetcher, fs);
+        var task = CreateTask(proxy);
+
+        var result = await handler.DownloadAsync(task, new Progress<DownloadProgress>(), default);
+
+        Assert.False(result.Success);
+        Assert.Contains("403", result.Error!);
+        Assert.Contains("缓存", result.Error!);
+        Assert.DoesNotContain("清单为空", result.Error!);
+    }
+
+    /// <summary>
     /// 构造被测处理器。
     /// </summary>
     private static HlsDownloadHandler CreateHandler(FakeMediaFetcher fetcher, FakeFileSystem fs, IDownloadHandler? fallback = null)

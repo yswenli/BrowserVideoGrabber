@@ -388,7 +388,15 @@ public sealed class PreviewForm : Form
                     }});
                     hls.on(Hls.Events.ERROR, (event, data) => {{
                         if (data.fatal) {{
-                            showError('HLS 播放失败: ' + data.details);
+                            const code = data.response && data.response.code;
+                            if (code === 401 || code === 403) {{
+                                // 清单/密钥被拒：多半是地址签名过期，直接告诉用户该重新嗅探
+                                showError('清单被拒绝（HTTP ' + code + '）：地址签名可能已过期，请在页面按 F5 重新加载并播放后重新嗅探');
+                            }} else if (code) {{
+                                showError('HLS 播放失败（HTTP ' + code + '）: ' + data.details);
+                            }} else {{
+                                showError('HLS 播放失败: ' + data.details);
+                            }}
                         }}
                     }});
                 }} else if (video.canPlayType('application/vnd.apple.mpegurl')) {{
