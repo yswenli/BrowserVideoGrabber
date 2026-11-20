@@ -140,8 +140,12 @@ public sealed class CapsuleToolStripRenderer : ToolStripProfessionalRenderer
     /// 给 ToolStripButton 创建一个带 emoji/Unicode 图标的 16x16 Bitmap。
     /// </summary>
     /// <param name="glyph">图标字符（建议 1 个 emoji 或 Unicode 符号）。</param>
+    /// <param name="scale">
+    /// 图标相对默认尺寸的缩放比例。位图仍是 16x16（保证 ToolStrip 布局一致），
+    /// 只按比例缩小实际绘制的字形；默认 1 表示原始大小。
+    /// </param>
     /// <returns>16x16 的 Bitmap，透明背景上居中绘制 glyph。</returns>
-    public static Bitmap CreateGlyphIcon(string glyph)
+    public static Bitmap CreateGlyphIcon(string glyph, float scale = 1f)
     {
         var bmp = new Bitmap(16, 16);
         using var g = Graphics.FromImage(bmp);
@@ -150,7 +154,7 @@ public sealed class CapsuleToolStripRenderer : ToolStripProfessionalRenderer
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
         // emoji 字体渲染：Segoe UI Emoji 在 Windows 上能正确显示大多数符号
-        using var font = new Font("Segoe UI Emoji", 11f, FontStyle.Regular, GraphicsUnit.Point);
+        using var font = new Font("Segoe UI Emoji", 11f * scale, FontStyle.Regular, GraphicsUnit.Point);
         using var sf = new StringFormat
         {
             Alignment = StringAlignment.Center,

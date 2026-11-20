@@ -268,7 +268,7 @@ public sealed class MainForm : Form
             RenderMode = ToolStripRenderMode.Professional,
             Renderer = new CapsuleToolStripRenderer(),
             Dock = DockStyle.Top,
-            Padding = new Padding(4, 2, 4, 2)
+            Padding = new Padding(7, 2, 4, 2)
         };
 
         toolbar.Items.AddRange(
@@ -296,7 +296,8 @@ public sealed class MainForm : Form
         var button = new ToolStripButton
         {
             Text = label,
-            Image = CapsuleToolStripRenderer.CreateGlyphIcon(glyph),
+            // 主工具栏图标比默认图标小 10%，与导航栏 / 列表工具栏的 16px 图标区分开
+            Image = CapsuleToolStripRenderer.CreateGlyphIcon(glyph, 0.9f),
             DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
             Margin = new Padding(4, 0, 4, 0),
             Padding = new Padding(6, 2, 6, 2),
