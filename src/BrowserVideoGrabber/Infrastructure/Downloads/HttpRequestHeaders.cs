@@ -40,7 +40,14 @@ public static class HttpRequestHeaders
     /// </summary>
     /// <param name="request">目标请求。</param>
     /// <param name="context">请求上下文。</param>
-    public static void Apply(HttpRequestMessage request, RequestContext context)
+    /// <param name="includeOrigin">是否写入 <c>Origin</c> 头，默认 true。</param>
+    /// <remarks>
+    /// <paramref name="includeOrigin"/> 为 false 是 403 自适应回退路径的专用入口：
+    /// 实测部分 CDN（qnlycc 系）对携带页面 <c>Origin</c> 的分片请求直接拒绝，
+    /// 而另一部分 CDN（playergo 系）又依赖该头返回真实内容，故由调用方按响应结果决定去留，
+    /// 本方法只负责「按开关写入」，不做过期判断。
+    /// </remarks>
+    public static void Apply(HttpRequestMessage request, RequestContext context, bool includeOrigin = true)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
@@ -60,7 +67,7 @@ public static class HttpRequestHeaders
 
         // Origin 取「页面」的 origin 而非媒体地址自身：CDN 以该头做来源白名单校验，
         // 缺失或取错值会对每个分片返回合法但内容错误的占位数据。详见 RequestContext.Origin 备注。
-        if (!string.IsNullOrWhiteSpace(context.Origin))
+        if (includeOrigin && !string.IsNullOrWhiteSpace(context.Origin))
         {
             request.Headers.TryAddWithoutValidation("Origin", context.Origin);
         }

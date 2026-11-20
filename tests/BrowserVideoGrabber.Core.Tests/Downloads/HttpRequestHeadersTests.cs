@@ -68,6 +68,27 @@ public sealed class HttpRequestHeadersTests
     }
 
     /// <summary>
+    /// 调用方显式要求跳过 Origin（403 自适应回退路径）时，该头不得出现，其余头照常写入。
+    /// </summary>
+    [Fact]
+    public void Apply_ShouldSkipOrigin_WhenIncludeOriginIsFalse()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://cdn.example.com/seg0.ts");
+        var context = new RequestContext
+        {
+            Referer = "https://www.example.com/watch/1",
+            Origin = "https://www.example.com",
+            UserAgent = "Mozilla/5.0 Test"
+        };
+
+        HttpRequestHeaders.Apply(request, context, includeOrigin: false);
+
+        Assert.False(request.Headers.Contains("Origin"));
+        Assert.Equal("https://www.example.com/watch/1", request.Headers.Referrer?.ToString());
+        Assert.Equal("Mozilla/5.0 Test", request.Headers.NonValidated["User-Agent"].ToString());
+    }
+
+    /// <summary>
     /// 自定义请求头照常写入。
     /// </summary>
     [Fact]

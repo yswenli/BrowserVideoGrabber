@@ -22,6 +22,8 @@
 *
 *****************************************************************************/
 
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -43,8 +45,9 @@ namespace BrowserVideoGrabber.Infrastructure.Downloads;
 /// <b>三条铁律</b>：
 /// 1）业务失败（403/404/超时/令牌失效）落到 <see cref="MediaFetchResult.Success"/> = false，绝不抛异常；
 /// 2）只有调用方取消才允许向外抛 <see cref="OperationCanceledException"/>；
-/// 3）刻意不注入 <c>Origin</c> 头 —— 实测表明该头会让 playergo 系 CDN 对每个分片返回同一张
-/// 合法却无意义的占位 JPEG（HTTP 200 + <c>image/jpeg</c>），从而让「下载成功」与「内容有效」脱钩。
+/// 3）<c>Origin</c> 头按站点策略自适应回退 —— 默认携带（playergo 系 CDN 依赖该头返回真实内容），
+/// 被 403 拒绝时回退为不带 Origin 重试一次并按主机记住结论（qnlycc 系 CDN 对该头直接 403）。
+/// 详见 <see cref="SendWithOriginFallbackAsync"/>。
 /// </para>
 /// <para>
 /// 注入的 <see cref="HttpClient"/> 须关闭自动解压（分片拼接依赖字节偏移）、总超时设为无限（超时改由
@@ -58,6 +61,12 @@ public sealed class HttpMediaFetcher : IMediaFetcher
 
     private readonly HttpClient _httpClient;
     private readonly IFileSystem _fileSystem;
+
+    /// <summary>
+    /// 已证实「拒绝页面 Origin」的主机集合。命中后该主机的后续请求直接跳过 Origin，
+    /// 避免每个分片都先吃一次注定 403 的往返。
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _originRejectedByHost = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 初始化抓取器。
@@ -83,10 +92,8 @@ public sealed class HttpMediaFetcher : IMediaFetcher
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            HttpRequestHeaders.Apply(request, context);
-
-            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await SendWithOriginFallbackAsync(
+                uri, context, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return MediaFetchResult.Fail(DescribeStatus(response.StatusCode), IsRetryableStatus(response.StatusCode), (int)response.StatusCode);
@@ -119,10 +126,8 @@ public sealed class HttpMediaFetcher : IMediaFetcher
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            HttpRequestHeaders.Apply(request, context);
-
-            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await SendWithOriginFallbackAsync(
+                uri, context, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return MediaFetchResult.Fail(DescribeStatus(response.StatusCode), IsRetryableStatus(response.StatusCode), (int)response.StatusCode);
@@ -155,13 +160,9 @@ public sealed class HttpMediaFetcher : IMediaFetcher
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            HttpRequestHeaders.Apply(request, context);
-
             // 响应头读毕即返回，不让连接一直占用到整片下完；分片体积可达数 MB，流式写盘更省内存
-            using var response = await _httpClient
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                .ConfigureAwait(false);
+            using var response = await SendWithOriginFallbackAsync(
+                uri, context, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -211,9 +212,79 @@ public sealed class HttpMediaFetcher : IMediaFetcher
     /// <param name="url">原始地址。</param>
     /// <param name="uri">解析结果。</param>
     /// <returns>解析成功返回 true。</returns>
-    private static bool TryCreateUri(string url, out Uri? uri)
+    private static bool TryCreateUri(string url, [NotNullWhen(true)] out Uri? uri)
         => Uri.TryCreate(url, UriKind.Absolute, out uri)
            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    /// <summary>
+    /// 发送 GET 请求，遇「带 Origin 被 403 拒绝」时回退为不带 Origin 重试一次。
+    /// </summary>
+    /// <param name="uri">目标地址。</param>
+    /// <param name="context">请求上下文。</param>
+    /// <param name="completionOption">响应读取方式。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>最终响应（成功或回退后的失败），由调用方负责释放。</returns>
+    /// <remarks>
+    /// <para>
+    /// 两类站点策略互相矛盾：playergo 系 CDN 依赖页面 <c>Origin</c> 返回真实内容，
+    /// qnlycc 系 CDN 则对该头直接 403 —— 因此既不能一律携带也不能一律剔除，
+    /// 只能以响应为准做一次自适应回退。
+    /// </para>
+    /// <para>
+    /// 回退成功才把主机记入「拒绝 Origin」名单：回退后仍失败（如签名过期）时结论未被证实，
+    /// 下次仍应先尝试带 Origin，否则会把正常的 403 误学成来源策略问题。
+    /// </para>
+    /// </remarks>
+    private async Task<HttpResponseMessage> SendWithOriginFallbackAsync(
+        Uri uri,
+        RequestContext context,
+        HttpCompletionOption completionOption,
+        CancellationToken cancellationToken)
+    {
+        var hasOrigin = !string.IsNullOrWhiteSpace(context.Origin);
+        var skipOrigin = hasOrigin && _originRejectedByHost.ContainsKey(uri.Host);
+
+        var response = await SendOnceAsync(uri, context, includeOrigin: !skipOrigin, completionOption, cancellationToken)
+            .ConfigureAwait(false);
+
+        // 已跳过 Origin 还被拒、上下文本就无 Origin、或并非 403 —— 都没有回退依据
+        if (skipOrigin || !hasOrigin || response.StatusCode != HttpStatusCode.Forbidden)
+        {
+            return response;
+        }
+
+        response.Dispose();
+        response = await SendOnceAsync(uri, context, includeOrigin: false, completionOption, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (response.IsSuccessStatusCode)
+        {
+            _originRejectedByHost[uri.Host] = true;
+        }
+
+        return response;
+    }
+
+    /// <summary>
+    /// 单次 GET 发送。
+    /// </summary>
+    /// <param name="uri">目标地址。</param>
+    /// <param name="context">请求上下文。</param>
+    /// <param name="includeOrigin">是否携带 Origin 头。</param>
+    /// <param name="completionOption">响应读取方式。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>原始响应。</returns>
+    private async Task<HttpResponseMessage> SendOnceAsync(
+        Uri uri,
+        RequestContext context,
+        bool includeOrigin,
+        HttpCompletionOption completionOption,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        HttpRequestHeaders.Apply(request, context, includeOrigin);
+        return await _httpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// 把 HTTP 状态码转换为面向用户的中文失败描述。
