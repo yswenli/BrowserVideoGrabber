@@ -311,6 +311,91 @@ public class HlsDownloadHandlerTests
     }
 
     /// <summary>
+    /// 包装型播放地址（<c>?url=&lt;编码后的 m3u8&gt;</c>）的清单常被 CDN 缓存成过期副本，
+    /// 下载时应优先直连内层真实清单，而不是使用外层缓存。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_ProxyPlaylistUrl_PrefersInnerPlaylist()
+    {
+        var fs = new FakeFileSystem();
+        fs.SeedFile(OutputPath, 4096);
+        var fetcher = new FakeMediaFetcher(fs);
+        var inner = "https://cdn.example.com/videos/movie.m3u8?auth_key=fresh";
+        var proxy = "https://site.example.com/?url=" + Uri.EscapeDataString(inner);
+
+        // 外层包装地址是陈旧缓存：清单里一片都没有（真实场景中签名早已过期）
+        fetcher.SeedText(proxy, BuildMediaPlaylist(false));
+        fetcher.SeedText(inner, BuildMediaPlaylist(
+            false,
+            ("https://cdn.example.com/videos/seg0.ts", 2.0),
+            ("https://cdn.example.com/videos/seg1.ts", 2.0)));
+        fetcher.SeedFile("https://cdn.example.com/videos/seg0.ts", MakeTsSample(0));
+        fetcher.SeedFile("https://cdn.example.com/videos/seg1.ts", MakeTsSample(1));
+
+        var handler = CreateHandler(fetcher, fs);
+        var task = CreateTask(proxy);
+
+        var result = await handler.DownloadAsync(task, new Progress<DownloadProgress>(), default);
+
+        Assert.True(result.Success, result.Error);
+        Assert.False(result.IsPartial);
+    }
+
+    /// <summary>
+    /// 内层清单不可用时（例如真实地址需要外层代理附加的鉴权），应退回按原包装地址下载。
+    /// </summary>
+    [Fact]
+    public async Task DownloadAsync_ProxyInnerUnavailable_FallsBackToOuter()
+    {
+        var fs = new FakeFileSystem();
+        fs.SeedFile(OutputPath, 4096);
+        var fetcher = new FakeMediaFetcher(fs);
+        var inner = "https://cdn.example.com/videos/missing.m3u8?auth_key=fresh";
+        var proxy = "https://site.example.com/?url=" + Uri.EscapeDataString(inner);
+
+        // 内层未预置任何响应 → 取清单失败；外层包装地址可用
+        fetcher.SeedText(proxy, BuildMediaPlaylist(false, ("https://site.example.com/seg0.ts", 2.0)));
+        fetcher.SeedFile("https://site.example.com/seg0.ts", MakeTsSample(0));
+
+        var handler = CreateHandler(fetcher, fs);
+        var task = CreateTask(proxy);
+
+        var result = await handler.DownloadAsync(task, new Progress<DownloadProgress>(), default);
+
+        Assert.True(result.Success, result.Error);
+        Assert.False(result.IsPartial);
+    }
+
+    /// <summary>
+    /// AES-128 密钥取不到时，必须如实上报密钥失败原因，而不是误报「清单为空」。
+    /// </summary>
+    /// <remarks>
+    /// 分片下载器在密钥失败时返回空结局列表并附带 <see cref="HlsSegmentDownloadResult.FatalError"/>，
+    /// 上层若只看 <c>FetchedCount == 0</c> 就会把「密钥失败」说成「清单为空」，
+    /// 用户据此会去重新嗅探，而真正该处理的是密钥/签名问题。
+    /// </remarks>
+    [Fact]
+    public async Task DownloadAsync_KeyFetchFails_ReportsFatalReason()
+    {
+        var fs = new FakeFileSystem();
+        var fetcher = new FakeMediaFetcher(fs);
+        var url = "https://a.com/hls/aes.m3u8";
+
+        fetcher.SeedText(url, BuildAes128Playlist("https://a.com/key.bin", ("seg0.ts", 2.0)));
+        fetcher.FailWithMessage("https://a.com/key.bin", "资源地址已失效（HTTP 403），通常为动态签名过期。");
+
+        var handler = CreateHandler(fetcher, fs);
+        var task = CreateTask(url);
+
+        var result = await handler.DownloadAsync(task, new Progress<DownloadProgress>(), default);
+
+        Assert.False(result.Success);
+        Assert.Contains("AES-128 密钥", result.Error!);
+        Assert.Contains("HTTP 403", result.Error!);
+        Assert.DoesNotContain("清单为空", result.Error!);
+    }
+
+    /// <summary>
     /// 构造被测处理器。
     /// </summary>
     private static HlsDownloadHandler CreateHandler(FakeMediaFetcher fetcher, FakeFileSystem fs, IDownloadHandler? fallback = null)

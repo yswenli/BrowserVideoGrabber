@@ -25,6 +25,8 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
+using BrowserVideoGrabber.Core.Downloads;
+
 namespace BrowserVideoGrabber.App.Forms;
 
 /// <summary>
@@ -57,7 +59,11 @@ public sealed class PreviewForm : Form
     /// <param name="title">视频标题。</param>
     public PreviewForm(string videoUrl, string title)
     {
-        _videoUrl = videoUrl ?? throw new ArgumentNullException(nameof(videoUrl));
+        ArgumentNullException.ThrowIfNull(videoUrl);
+
+        // 包装播放地址的外层清单常是 CDN 缓存的过期副本（分片全 403），
+        // 预览同样应加载内层真实清单，才能拿到现签的分片地址
+        _videoUrl = PlaylistProxyResolver.Resolve(videoUrl);
         _title = string.IsNullOrWhiteSpace(title) ? "视频预览" : title;
 
         InitializeComponents();

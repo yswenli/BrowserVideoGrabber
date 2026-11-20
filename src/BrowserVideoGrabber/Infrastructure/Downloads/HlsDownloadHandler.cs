@@ -118,10 +118,19 @@ public sealed class HlsDownloadHandler : IDownloadHandler
             return DownloadResult.Fail("下载任务的输出路径为空，无法确定保存位置。", isRetryable: false);
         }
 
-        if (!Uri.TryCreate(task.Url, UriKind.Absolute, out var baseUri)
-            || (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
+        if (!Uri.TryCreate(task.Url, UriKind.Absolute, out var originalUri)
+            || (originalUri.Scheme != Uri.UriSchemeHttp && originalUri.Scheme != Uri.UriSchemeHttps))
         {
             return DownloadResult.Fail($"无法识别的下载地址：{task.Url}", isRetryable: false);
+        }
+
+        // 包装播放地址（站点用自己的 ?url=<真实 m3u8> 代理）常被 CDN 整段缓存，
+        // 缓存副本里的签名过期后分片全 403；内层真实清单每次访问都会现签，优先用它。
+        var playlistUrl = PlaylistProxyResolver.Resolve(task.Url);
+        var playlistUri = originalUri;
+        if (!string.Equals(playlistUrl, task.Url, StringComparison.Ordinal))
+        {
+            playlistUri = new Uri(playlistUrl, UriKind.Absolute);
         }
 
         EnsureOutputDirectory(task.OutputPath);
@@ -133,13 +142,20 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         var assembledPath = Path.Combine(workDirectory, "assembled.ts");
 
         // 1) 取顶层清单：主清单需再选一档清晰度取媒体清单
-        var top = await FetchTextAsync(task.Url, task.Context, cancellationToken).ConfigureAwait(false);
+        var top = await FetchTextAsync(playlistUrl, task.Context, cancellationToken).ConfigureAwait(false);
+        if (!top.Ok && playlistUri != originalUri)
+        {
+            // 内层不可用（部分站点的包装层才是唯一带鉴权的入口）：退回包装地址
+            top = await FetchTextAsync(task.Url, task.Context, cancellationToken).ConfigureAwait(false);
+            playlistUri = originalUri;
+        }
+
         if (!top.Ok)
         {
             return DownloadResult.Fail(top.Error, top.Retryable);
         }
 
-        var topPlaylist = M3u8Parser.Parse(top.Text!, baseUri);
+        var topPlaylist = M3u8Parser.Parse(top.Text!, playlistUri);
         HlsPlanResult planResult;
 
         if (topPlaylist.IsMasterPlaylist)
@@ -164,7 +180,7 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         }
         else
         {
-            planResult = HlsPlanBuilder.Build(top.Text, baseUri);
+            planResult = HlsPlanBuilder.Build(top.Text, playlistUri);
         }
 
         // 2) 不可下载的三类情形分流处理
@@ -248,6 +264,14 @@ public sealed class HlsDownloadHandler : IDownloadHandler
         if (report.FetchedCount == 0)
         {
             CleanupWorkDirectory(workDirectory, report.FetchedFilePaths, assembledPath);
+
+            // 密钥获取失败等致命错误必须原样透出：用「清单为空」盖掉它会把用户
+            // 引向重新嗅探，而真正要处理的是签名/密钥问题
+            if (!string.IsNullOrEmpty(report.FatalError))
+            {
+                return DownloadResult.Fail(report.FatalError!, isRetryable: false);
+            }
+
             return DownloadResult.Fail(BuildAllFailedDetail(report), isRetryable: false);
         }
 
