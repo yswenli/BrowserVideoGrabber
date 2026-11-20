@@ -61,7 +61,10 @@ public enum DownloadAction
     CopyUrl,
 
     /// <summary>清空全部终态任务。</summary>
-    ClearFinished
+    ClearFinished,
+
+    /// <summary>在播放框中预览尚未完成的任务（直接播放源地址）。</summary>
+    Preview
 }
 
 /// <summary>

@@ -398,6 +398,81 @@ public sealed class DownloadPaneTests
         });
     }
 
+    [Fact]
+    public void DoubleClick_RunningTask_RaisesPreviewAction()
+    {
+        RunStaWithForm(form =>
+        {
+            using var pane = new DownloadPane();
+            form.Controls.Add(pane);
+            var running = ListsOf(pane)[0];
+
+            var task = CreateTask("预览任务", "https://example.com/preview.m3u8", DownloadStatus.Running);
+            pane.ApplyState(task);
+            running.Items[0].Selected = true;
+
+            DownloadActionEventArgs? captured = null;
+            pane.ActionRequested += (_, args) => captured = args;
+
+            RaiseListDoubleClick(pane);
+
+            // 「正在下载」的行也要能预览：非完成态双击应上抛 Preview 意图，而不是什么都不做
+            Assert.NotNull(captured);
+            Assert.Equal(DownloadAction.Preview, captured!.Action);
+            Assert.Same(task, captured.Task);
+        });
+    }
+
+    [Fact]
+    public void DoubleClick_PausedTask_RaisesPreviewAction()
+    {
+        RunStaWithForm(form =>
+        {
+            using var pane = new DownloadPane();
+            form.Controls.Add(pane);
+            var running = ListsOf(pane)[0];
+
+            var task = CreateTask("已暂停任务", "https://example.com/paused.m3u8", DownloadStatus.Paused);
+            pane.ApplyState(task);
+            running.Items[0].Selected = true;
+
+            DownloadActionEventArgs? captured = null;
+            pane.ActionRequested += (_, args) => captured = args;
+
+            RaiseListDoubleClick(pane);
+
+            Assert.NotNull(captured);
+            Assert.Equal(DownloadAction.Preview, captured!.Action);
+            Assert.Same(task, captured.Task);
+        });
+    }
+
+    [Fact]
+    public void DoubleClick_CompletedTask_RaisesOpenFileAction()
+    {
+        RunStaWithForm(form =>
+        {
+            using var pane = new DownloadPane();
+            form.Controls.Add(pane);
+            var finished = ActivateTab(pane, 1);
+
+            var task = CreateTask("已完成", "https://example.com/done.mp4", DownloadStatus.Completed, outputBytes: 1024);
+            task.OutputPath = @"C:\output\done.mp4";
+            pane.ApplyState(task);
+            finished.Items[0].Selected = true;
+
+            DownloadActionEventArgs? captured = null;
+            pane.ActionRequested += (_, args) => captured = args;
+
+            RaiseListDoubleClick(pane);
+
+            // 既有行为：完成态仍然直接打开文件，不被预览分支顶替
+            Assert.NotNull(captured);
+            Assert.Equal(DownloadAction.OpenFile, captured!.Action);
+            Assert.Same(task, captured.Task);
+        });
+    }
+
     /// <summary>
     /// 取出面板内部两个页签的列表控件，顺序与页签一致。
     /// </summary>
@@ -534,6 +609,20 @@ public sealed class DownloadPaneTests
             types: [typeof(object), typeof(ColumnClickEventArgs)],
             modifiers: null)!;
         method.Invoke(list, [null, new ColumnClickEventArgs(columnIndex)]);
+    }
+
+    /// <summary>
+    /// 通过反射触发面板私有的列表双击处理，模拟用户双击行。
+    /// </summary>
+    private static void RaiseListDoubleClick(DownloadPane pane)
+    {
+        var method = typeof(DownloadPane).GetMethod(
+            "OnListDoubleClick",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(object), typeof(EventArgs)],
+            modifiers: null)!;
+        method.Invoke(pane, [null, EventArgs.Empty]);
     }
 
     /// <summary>

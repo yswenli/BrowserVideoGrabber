@@ -765,14 +765,46 @@ public sealed class MainForm : Form
         }
         catch (Exception exception)
         {
-            SetStatus($"预览失败：{exception.Message}");
-            MessageBox.Show(
-                this,
-                $"预览失败：{exception.Message}",
-                "预览",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ReportPreviewFailure(exception);
         }
+    }
+
+    /// <summary>
+    /// 预览一条下载任务对应的源地址。
+    /// </summary>
+    /// <param name="task">下载任务。</param>
+    /// <remarks>
+    /// 尚未完成的任务没有本地文件可播，因此直接播放嗅探时记录的源地址：
+    /// 包装地址本身就能被播放器解析，无需等待下载完成。
+    /// </remarks>
+    private void PreviewTask(DownloadTask task)
+    {
+        try
+        {
+            var title = string.IsNullOrWhiteSpace(task.Title) ? task.Url : task.Title;
+            var previewForm = new PreviewForm(task.Url, title);
+            previewForm.Show(this);
+            SetStatus($"正在预览：{title}");
+        }
+        catch (Exception exception)
+        {
+            ReportPreviewFailure(exception);
+        }
+    }
+
+    /// <summary>
+    /// 统一提示预览失败。
+    /// </summary>
+    /// <param name="exception">失败原因。</param>
+    private void ReportPreviewFailure(Exception exception)
+    {
+        SetStatus($"预览失败：{exception.Message}");
+        MessageBox.Show(
+            this,
+            $"预览失败：{exception.Message}",
+            "预览",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
     }
 
     /// <summary>
@@ -851,6 +883,10 @@ public sealed class MainForm : Form
 
             case DownloadAction.CopyUrl:
                 CopyTaskUrl(e.Task!);
+                break;
+
+            case DownloadAction.Preview:
+                PreviewTask(e.Task!);
                 break;
 
             case DownloadAction.ClearFinished:

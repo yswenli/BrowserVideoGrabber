@@ -711,15 +711,23 @@ public sealed class DownloadPane : UserControl
     }
 
     /// <summary>
-    /// 列表双击：已完成的任务直接打开文件，其余不处理。
+    /// 列表双击：已完成的任务直接打开文件，其余任务在播放框中预览。
     /// </summary>
     private void OnListDoubleClick(object? sender, EventArgs e)
     {
         var task = GetSelectedTask();
-        if (task is not null && task.Status == DownloadStatus.Completed)
+        if (task is null)
         {
-            ActionRequested?.Invoke(this, new DownloadActionEventArgs { Task = task, Action = DownloadAction.OpenFile });
+            return;
         }
+
+        ActionRequested?.Invoke(
+            this,
+            new DownloadActionEventArgs
+            {
+                Task = task,
+                Action = task.Status == DownloadStatus.Completed ? DownloadAction.OpenFile : DownloadAction.Preview
+            });
     }
 
     /// <inheritdoc />
